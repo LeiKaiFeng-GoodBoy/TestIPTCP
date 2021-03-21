@@ -110,7 +110,7 @@ namespace LeiKaiFeng.TCPIP
 
             header._TCPHeader12_14._Byte_0 = (byte)(5 << 4);
 
-            header._TCPHeader12_14._Byte_1 = (byte)TCPFlag.RST;
+            header._TCPHeader12_14._Byte_1 = (byte)(TCPFlag.RST | TCPFlag.ACK);
 
             var ph = new PseudoHeader(
                 sourceAddress,
@@ -119,8 +119,6 @@ namespace LeiKaiFeng.TCPIP
                 (ushort)count);
 
             header._Checksum = Meth.AsBigEndian(Meth.CalculationHeaderChecksum(ph, buffer.AsSpan(offst), count));
-
-            Console.WriteLine(Meth.CalculationHeaderChecksum(ph, buffer.AsSpan(offst), count));
 
         }
     }
