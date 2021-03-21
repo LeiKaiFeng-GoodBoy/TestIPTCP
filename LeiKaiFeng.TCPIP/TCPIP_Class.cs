@@ -122,7 +122,7 @@ namespace LeiKaiFeng.TCPIP
         {
             IPData = new IPData(sourceAddress, desAddress, Protocol.TCP);
 
-            int count = TCPHeader.HEADER_SIZE;
+            int count = TCPHeader.HEADER_SIZE + 1;
 
             Offset -= count;
 

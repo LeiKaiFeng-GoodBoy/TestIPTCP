@@ -112,6 +112,15 @@ namespace LeiKaiFeng.TCPIP
                 sum += Meth.AsBigEndian(item);
             }
 
+            if ((buffer.Length % sizeof(ushort)) != 0)
+            {
+              
+                uint n = buffer[buffer.Length - 1];
+
+                sum += n << 8;
+            }
+
+
             return sum;
         }
 
@@ -140,17 +149,11 @@ namespace LeiKaiFeng.TCPIP
             return AsSum(sum);
         }
 
-        //假如读取的ip包已是最大则会索引溢出
+        
         public static ushort CalculationHeaderChecksum(PseudoHeader pseudoHeader, Span<byte> buffer, int length)
         {
 
-            if ((length % 2) != 0)
-            {
-                buffer[length] = 0;
-
-                length += 1;
-            }
-
+           
             uint sum = AddStructSum(ref pseudoHeader);
 
             sum += AddSpanBytesSum(buffer.Slice(0, length));
