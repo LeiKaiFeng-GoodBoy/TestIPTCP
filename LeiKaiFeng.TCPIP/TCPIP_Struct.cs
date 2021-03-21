@@ -96,7 +96,7 @@ namespace LeiKaiFeng.TCPIP
 
             header._Sum = Meth.AsBigEndian(Meth.CalculationHeaderChecksum(
                 new PseudoHeader(writeData.Source, writeData.Des, ref header),
-                buffer, alllength));
+                buffer.Slice(0, alllength)));
 
 
             return alllength;

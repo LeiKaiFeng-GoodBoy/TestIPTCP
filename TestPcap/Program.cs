@@ -66,18 +66,21 @@ namespace Test
 
 
 
-                for (int i = 0; i < 1000; i++)
+                for (int i = 0; i < 100; i++)
                 {
 
                     var packet = layer.CreateDownPacket();
 
-                    packet.Write(
+                    packet.WriteTCP(
                         new IPv4Address(192, 168, 1, 106),
                         50,
-                        new IPv4Address(192, 168, 1, 105),
-                        56,
-                        456
-                         );
+                        new IPv4Address(58, 254, 149, 226),
+                        80,
+                        TCPFlag.ACK | TCPFlag.SYN,
+                        65535,
+                        45,
+                        4563434,
+                        default);
 
                     layer.AddDownPacket(packet);
                 }
@@ -92,8 +95,8 @@ namespace Test
             EthernetLayer ethernetLayer =
                 new EthernetLayer
                 {
-                    Source = new MacAddress("01:01:01:01:01:01"),
-                    Destination = new MacAddress("02:02:02:02:02:02"),
+                    Source = new MacAddress("00:08:ca:c1:87:a9"),
+                    Destination = new MacAddress("48:7d:2e:81:d1:37"),
                     EtherType = EthernetType.IpV4,
                 };
 

@@ -150,17 +150,13 @@ namespace LeiKaiFeng.TCPIP
         }
 
         
-        public static ushort CalculationHeaderChecksum(PseudoHeader pseudoHeader, Span<byte> buffer, int length)
+        public static ushort CalculationHeaderChecksum(PseudoHeader pseudoHeader, Span<byte> buffer)
         {
-
-           
             uint sum = AddStructSum(ref pseudoHeader);
 
-            sum += AddSpanBytesSum(buffer.Slice(0, length));
-
+            sum += AddSpanBytesSum(buffer);
 
             return AsSum(sum);
         }
-
     }
 }

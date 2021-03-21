@@ -83,14 +83,17 @@ namespace LeiKaiFeng.TCPIP
         public ushort WindowSize => Meth.AsBigEndian(_WindowSize);
 
 
-        public static void Set(ref TCPHeader header, IPv4Address sourceAddress,      
+        public static void Set(
+            ref TCPHeader header,
+            IPv4Address sourceAddress,      
             ushort sourcePort,
             IPv4Address desAddress,
             ushort desPort,
-            uint sm,
-            byte[] buffer,
-            int offst, 
-            int count)
+            TCPFlag tcpFlag,
+            ushort windowSize,
+            uint sequenceNumber,
+            uint acknowledgmentNumber,
+            Span<byte> headerAndData)
         {
             header = new TCPHeader();
 
@@ -98,28 +101,23 @@ namespace LeiKaiFeng.TCPIP
 
             header._DesPort = Meth.AsBigEndian(desPort);
 
-            
-            header._SequenceNumber = 123543;
+            header._SequenceNumber = Meth.AsBigEndian(sequenceNumber);
 
-            header._AcknowledgmentNumber = Meth.AsBigEndian(sm + 1);
+            header._AcknowledgmentNumber = Meth.AsBigEndian(acknowledgmentNumber);
 
-
-            
-
-            header._WindowSize = Meth.AsBigEndian((ushort)65535);
+            header._WindowSize = Meth.AsBigEndian(windowSize);
 
             header._TCPHeader12_14._Byte_0 = (byte)(5 << 4);
 
-            header._TCPHeader12_14._Byte_1 = (byte)(TCPFlag.RST | TCPFlag.ACK);
+            header._TCPHeader12_14._Byte_1 = (byte)tcpFlag;
 
             var ph = new PseudoHeader(
                 sourceAddress,
                 desAddress,
-                 Protocol.TCP,
-                (ushort)count);
+                Protocol.TCP,
+                (ushort)headerAndData.Length);
 
-            header._Checksum = Meth.AsBigEndian(Meth.CalculationHeaderChecksum(ph, buffer.AsSpan(offst), count));
-
+            header._Checksum = Meth.AsBigEndian(Meth.CalculationHeaderChecksum(ph, headerAndData));
         }
     }
 }

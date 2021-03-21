@@ -114,31 +114,64 @@ namespace LeiKaiFeng.TCPIP
 
         public IPData IPData { get; private set; }
 
-        public void Write(IPv4Address sourceAddress,      
+        int Copy(Span<byte> buffer)
+        {
+            Span<byte> arrayBuffer = Array.AsSpan(Offset);
+
+            int n;
+            if (buffer.Length > arrayBuffer.Length)
+            {
+                buffer.Slice(0, arrayBuffer.Length).CopyTo(arrayBuffer);
+
+                n = arrayBuffer.Length;
+            }
+            else
+            {
+                buffer.CopyTo(arrayBuffer);
+
+                n = buffer.Length;
+
+            }
+
+            Count += n;
+
+            return n;
+        }
+
+        public int WriteTCP(
+            IPv4Address sourceAddress,
             ushort sourcePort,
             IPv4Address desAddress,
             ushort desPort,
-            uint sm)
+            TCPFlag tcpFlag,
+            ushort windowSize,
+            uint sequenceNumber,
+            uint acknowledgmentNumber,
+            Span<byte> buffer)
         {
             IPData = new IPData(sourceAddress, desAddress, Protocol.TCP);
 
-            int count = TCPHeader.HEADER_SIZE + 1;
+            int count = Copy(buffer);
 
-            Offset -= count;
+            Offset -= TCPHeader.HEADER_SIZE;
 
-            Count += count;
+            Count += TCPHeader.HEADER_SIZE;
 
             ref TCPHeader header = ref Meth.AsStruct<TCPHeader>(Array.AsSpan(Offset));
 
-            TCPHeader.Set(ref header,
+            TCPHeader.Set(
+                ref header,
                 sourceAddress,
                 sourcePort,
                 desAddress,
                 desPort,
-                sm,
-                Array,
-                Offset,
-                Count);
+                tcpFlag,
+                windowSize,
+                sequenceNumber,
+                acknowledgmentNumber,
+                Array.AsSpan(Offset, Count));
+
+            return count;
         }
 
         internal void WriteIPPacket(Action<byte[], int, int> action)
