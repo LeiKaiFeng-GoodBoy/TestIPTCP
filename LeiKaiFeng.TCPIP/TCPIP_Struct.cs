@@ -24,6 +24,14 @@ namespace LeiKaiFeng.TCPIP
         [FieldOffset(10)]
         readonly ushort _Length;
 
+        public PseudoHeader(IPv4Address sourceAddress, IPv4Address desAddress, Protocol protocol, ushort length)
+        {
+            _SourceAddress = sourceAddress;
+            _DesAddress = desAddress;
+            _Pro = (byte)protocol;
+            _Length = Meth.AsBigEndian(length);
+        }
+
         public PseudoHeader(IPv4Address sourceAddress, IPv4Address desAddress, ref UDPHeader header)
         {
             _SourceAddress = sourceAddress;
@@ -302,9 +310,9 @@ namespace LeiKaiFeng.TCPIP
     }
 
     [StructLayout(LayoutKind.Explicit, Size = 20)]
-    public struct IPHeader
+    internal struct IPHeader
     {
-        const int HEADER_SIZE = 20;
+        public const int HEADER_SIZE = 20;
 
         [FieldOffset(0)]
         IPHeaderBit0_32 _IPHeader0_32;
@@ -324,6 +332,33 @@ namespace LeiKaiFeng.TCPIP
         [FieldOffset(16)]
         IPv4Address _DesAddress;
 
+        public static void Set(ref IPHeader header, IPData ipData, ushort count)
+        {
+            header = new IPHeader();
+
+            ushort allLength = GetAllLength(count);
+
+            header._IPHeader0_32._Version_HeaderLength = 0b0100_0101;
+
+
+            header._IPHeader0_32._AllLegnth = Meth.AsBigEndian(allLength);
+
+            header._IPHeader64_96._Protocol = (byte)ipData.Protocol;
+
+            header._IPHeader64_96._TTL = 128;
+
+            header._SourceAddress = ipData.SourceAddress;
+
+            header._DesAddress = ipData.DesAddress;
+
+            header._IPHeader32_64._16Flag = Meth.GetCount();
+
+            header._IPHeader32_64._Frag = 0x40;
+
+
+            header.CalculationHeaderChecksum();
+        }
+
         public static ushort Set(ref IPHeader header, IPWriteData writeData)
         {
             header = new IPHeader();
@@ -335,7 +370,7 @@ namespace LeiKaiFeng.TCPIP
 
             header._IPHeader0_32._AllLegnth = Meth.AsBigEndian(allLength);
 
-            header._IPHeader64_96._Protocol = writeData.Pro;
+            header._IPHeader64_96._Protocol = (byte)writeData.Pro;
 
             header._IPHeader64_96._TTL = 128;
 
@@ -378,10 +413,20 @@ namespace LeiKaiFeng.TCPIP
 
         public byte TTL => _IPHeader64_96._TTL;
 
-        public byte Protocol => _IPHeader64_96._Protocol;
+        public Protocol Protocol => (Protocol)_IPHeader64_96._Protocol;
 
         public IPv4Address SourceAddress => _SourceAddress;
 
         public IPv4Address DesAddress => _DesAddress;
     }
+
+
+
+    public enum Protocol : byte
+    {
+        TCP = 6,
+
+        UDP = 17,
+    }
+
 }

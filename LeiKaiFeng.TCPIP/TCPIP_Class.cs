@@ -10,139 +10,353 @@ using System.Threading;
 namespace LeiKaiFeng.TCPIP
 {
 
-
-
-    public sealed class Packet
+    [StructLayout(LayoutKind.Auto)]
+    public readonly struct IPData
     {
-        public byte[] Array { get; }
+        public IPData(IPv4Address sourceAddress, IPv4Address desAddress, Protocol protocol)
+        {
+            SourceAddress = sourceAddress;
+            DesAddress = desAddress;
+            Protocol = protocol;
+        }
 
-        public int Offset { get; private set; }
+        public IPv4Address SourceAddress { get; }
+
+        public IPv4Address DesAddress { get; }
+
+        public Protocol Protocol { get; }
+    }
+
+    [StructLayout(LayoutKind.Auto)]
+    public sealed class UPPacket
+    {
+        PacketPool<UPPacket> PacketPool { get; }
+
+        byte[] Array { get; }
+
+        int Offset { get; set; }
         
-        public int Count { get; private set; }
+        int Count { get; set; }
 
+        public IPData IPData { get; private set; }
 
-        public void Read(Func<byte[], int, int, int> func)
+        internal bool ReadIPPackeet(Func<byte[], int, int, int> func)
         {
             int count = func(Array, 0, Array.Length);
 
             Offset = 0;
 
             Count = count;
+
+            return Read();
         }
 
-        public void Write(Action<byte[], int, int> action)
+        bool Read()
         {
-            action(Array, Offset, Count);
+            ref IPHeader header = ref Meth.AsStruct<IPHeader>(Array.AsSpan(Offset));
 
-            Offset = 0;
+            if (header.HeadLength != 5)
+            {
+                return false;
+            }
+            else
+            {
+                IPData = new IPData(
+                    header.SourceAddress,
+                    header.DesAddress,
+                    header.Protocol);
 
-            Count = 0;
+                Offset += IPHeader.HEADER_SIZE;
+
+                Count -= IPHeader.HEADER_SIZE;
+
+                return true;
+            }
         }
 
-        public Packet(int size)
+        public TCPHeader TCPHeader()
         {
+            return Meth.AsStruct<TCPHeader>(Array.AsSpan(Offset));
+        }
+
+        internal UPPacket(int size, PacketPool<UPPacket> packetPool)
+        {
+            PacketPool = packetPool;
+
             Array = new byte[size];
 
             Offset = 0;
 
             Count = 0;
         }
+
+        public void Recycle()
+        {
+            PacketPool.Set(this);
+        }
     }
 
+    [StructLayout(LayoutKind.Auto)]
+    public sealed class DownPacket
+    {
+        PacketPool<DownPacket> PacketPool { get; }
 
-    public sealed class PacketPool
+
+        byte[] Array { get; }
+
+        int Offset { get; set; }
+
+
+        //Count代表的是是写入的有效字节的长度
+        //而不是缓冲区可以使用的长度
+        int Count { get; set; }
+
+
+        public IPData IPData { get; private set; }
+
+        public void Write(IPv4Address sourceAddress,      
+            ushort sourcePort,
+            IPv4Address desAddress,
+            ushort desPort,
+            uint sm)
+        {
+            IPData = new IPData(sourceAddress, desAddress, Protocol.TCP);
+
+            int count = TCPHeader.HEADER_SIZE;
+
+            Offset -= count;
+
+            Count += count;
+
+            ref TCPHeader header = ref Meth.AsStruct<TCPHeader>(Array.AsSpan(Offset));
+
+            TCPHeader.Set(ref header,
+                sourceAddress,
+                sourcePort,
+                desAddress,
+                desPort,
+                sm,
+                Array,
+                Offset,
+                Count);
+        }
+
+        internal void WriteIPPacket(Action<byte[], int, int> action)
+        {
+            WriteIPHeader();
+
+            action(Array, Offset, Count);
+        }
+
+
+        void WriteIPHeader()
+        {
+            int count = Count;
+
+            Offset -= IPHeader.HEADER_SIZE;
+
+            Count += IPHeader.HEADER_SIZE;
+
+            ref IPHeader header = ref Meth.AsStruct<IPHeader>(Array.AsSpan(Offset));
+
+            //之前有限制所以转换会不溢出
+            IPHeader.Set(ref header, IPData, (ushort)count);
+        }
+
+        internal DownPacket(int size, PacketPool<DownPacket> packetPool)
+        {
+            PacketPool = packetPool;
+
+            Array = new byte[size];
+
+            InitOffsetCount();
+        }
+
+
+        void InitOffsetCount()
+        {
+            //给标头预留空间免得复制缓冲区
+            Offset = 200;
+
+            Count = 0;
+        }
+
+        public void Recycle()
+        {
+            InitOffsetCount();
+
+            PacketPool.Set(this);
+        }
+    }
+
+    sealed class PacketPool<T>
     {
 
 
-        readonly ConcurrentQueue<Packet> m_queue = new ConcurrentQueue<Packet>();
+        readonly ConcurrentQueue<T> m_queue = new ConcurrentQueue<T>();
 
 
-        readonly Func<Packet> m_create;
+        readonly Func<PacketPool<T>, T> m_create;
 
-        public PacketPool(Func<Packet> create)
+        public PacketPool(Func<PacketPool<T>, T> create)
         {
             m_create = create ?? throw new ArgumentNullException(nameof(create));
         }
 
-        public Packet Get()
+        public T Get()
         {
-            if (m_queue.TryDequeue(out Packet packet))
+            if (m_queue.TryDequeue(out T packet))
             {
                 return packet;
             }
             else
             {
-                return m_create();
+                return m_create(this);
             }
         }
 
 
-        public void Set(Packet packet)
+        public void Set(T packet)
         {
             m_queue.Enqueue(packet);
         }
     }
 
 
-    public sealed class IPLayer
+    public sealed class IPLayerInfo
     {
-        readonly Func<byte[], int, int, int> m_read;
-
-        readonly Action<byte[], int, int> m_write;
-
-        readonly PacketPool m_packetPool;
-
-        readonly BlockingCollection<Packet> m_readPacketColl = new BlockingCollection<Packet>(6);
-
-        readonly BlockingCollection<Packet> m_writePacketColl = new BlockingCollection<Packet>(6);
-
-        public IPLayer(Func<byte[], int, int, int> read, Action<byte[], int, int> write, int mtu)
+        public IPLayerInfo(Func<byte[], int, int, int> read, Action<byte[], int, int> write)
         {
-            m_read = read ?? throw new ArgumentNullException(nameof(read));
-       
-            m_write = write ?? throw new ArgumentNullException(nameof(write));
+            int mtuSize = 65535;
+
+            if (mtuSize < 576 || mtuSize > ushort.MaxValue)
+            {
+                throw new ArgumentOutOfRangeException(nameof(mtuSize), "mtu太小或太大了，偏移会出错");
+            }
+
+            
+            Read = read ?? throw new ArgumentNullException(nameof(read));
+           
+
+            Write = write ?? throw new ArgumentNullException(nameof(write));
+
+            UPPacketPool = new PacketPool<UPPacket>((pool) => new UPPacket(mtuSize, pool));
+
+            DownPacketPool = new PacketPool<DownPacket>((pool) => new DownPacket(mtuSize, pool));
+
+            UPPacketColl = new BlockingCollection<UPPacket>(6);
+
+            DownPacketColl = new BlockingCollection<DownPacket>(6);
         }
 
-        void Read()
+        internal Func<byte[], int, int, int> Read { get; }
+
+        internal Action<byte[], int, int> Write { get; }
+
+        internal PacketPool<UPPacket> UPPacketPool { get; }
+
+        internal BlockingCollection<UPPacket> UPPacketColl { get; }
+
+
+        internal PacketPool<DownPacket> DownPacketPool { get; }
+
+        internal BlockingCollection<DownPacket> DownPacketColl { get; }
+
+    }
+
+    public sealed class IPLayer
+    {
+        readonly IPLayerInfo m_info;
+
+        private IPLayer(IPLayerInfo info)
         {
-            while (true)
+            m_info = info ?? throw new ArgumentNullException(nameof(info));
+        }
+
+
+        public static IPLayer Init(IPLayerInfo info)
+        {
+            return Init(info, (e) => { });
+        }
+
+
+        public static IPLayer Init(IPLayerInfo info, Action<Exception> logAction)
+        {
+            IPLayer ipLayer = new IPLayer(info);
+
+            CreateThreadAndRun(ipLayer.Read, logAction);
+
+            CreateThreadAndRun(ipLayer.Write, logAction);
+
+            return ipLayer;
+        }
+
+        static void CreateThreadAndRun(Action action, Action<Exception> logAction)
+        {
+            new Thread(() =>
             {
-                Packet packet = m_packetPool.Get();
-
-                packet.Read(m_read);
-
-                m_readPacketColl.Add(packet);
-            }
+                try
+                {
+                    action();
+                }
+                catch (Exception e)
+                {
+                    logAction(e);
+                }
+            }).Start();
         }
 
         void Write()
         {
             while (true)
             {
-                Packet packet = m_writePacketColl.Take();
+                DownPacket packet = m_info.DownPacketColl.Take();
 
-                packet.Write(m_write);
+                packet.WriteIPPacket(m_info.Write);
 
-                m_packetPool.Set(packet);
+                packet.Recycle();
             }
         }
 
 
-
-        public void SetPool(Packet packet)
+        void Read()
         {
-            m_packetPool.Set(packet);
+            while (true)
+            {
+                UPPacket packet = m_info.UPPacketPool.Get();
+
+                if (packet.ReadIPPackeet(m_info.Read))
+                {
+                    m_info.UPPacketColl.Add(packet);
+                }
+                else
+                {
+                    packet.Recycle();
+                   
+                    Console.WriteLine("已丢弃ip包");
+                }
+            }
         }
 
+        public DownPacket CreateDownPacket()
+        {
+            return m_info.DownPacketPool.Get();
+        }
+
+
+        public UPPacket TakeUPPacket()
+        {
+            return m_info.UPPacketColl.Take();
+        }
+
+
+        public void AddDownPacket(DownPacket packet)
+        {
+            m_info.DownPacketColl.Add(packet);
+        }
     }
 
 
-
-
-    public static class Protocol
-    {
-        public const byte UDP = 17;
-    }
 
     [StructLayout(LayoutKind.Auto)]
     public readonly ref struct UDPReadData
@@ -179,7 +393,7 @@ namespace LeiKaiFeng.TCPIP
     [StructLayout(LayoutKind.Auto)]
     public readonly ref struct IPReadData
     {
-        public IPReadData(byte[] buffer, IPv4Address source, IPv4Address des, byte pro, Span<byte> span)
+        public IPReadData(byte[] buffer, IPv4Address source, IPv4Address des, Protocol pro, Span<byte> span)
         {
             Buffer = buffer;
             Source = source;
@@ -194,7 +408,7 @@ namespace LeiKaiFeng.TCPIP
 
         public IPv4Address Des { get; }
 
-        public byte Pro { get; }
+        public Protocol Pro { get; }
 
         public Span<byte> Span { get; }
     }
@@ -228,7 +442,7 @@ namespace LeiKaiFeng.TCPIP
     [StructLayout(LayoutKind.Auto)]
     public readonly ref struct IPWriteData
     {
-        public IPWriteData(IPv4Address source, IPv4Address des, ushort length, byte pro)
+        public IPWriteData(IPv4Address source, IPv4Address des, ushort length, Protocol pro)
         {
             Source = source;
             Des = des;
@@ -242,7 +456,7 @@ namespace LeiKaiFeng.TCPIP
 
         public ushort Length { get; }
 
-        public byte Pro { get; }
+        public Protocol Pro { get; }
     }
 
 

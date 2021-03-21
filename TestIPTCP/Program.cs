@@ -17,17 +17,22 @@ namespace TestIPTCP
 
         static void UdpRead(Socket socket)
         {
-            byte[] buffer = new byte[75536];
 
-            var stream = new IPProtocol(new UDPProtocol());
+            var la = IPLayer.Init(new IPLayerInfo(
+                (buffer, offst, count) => socket.Receive(buffer, offst, count, SocketFlags.None),
+                (buffer, offset, count) => socket.Send(buffer, offset, count, SocketFlags.None)));
+
             while (true)
             {
 
-                int n = stream.ReadPacket(buffer);
-                Console.WriteLine(n);
-                socket.Send(buffer, 0, n, SocketFlags.None);
+                var packet = la.TakeUPPacket();
 
-                Thread.Sleep(1000);
+
+                var header = packet.TCPHeader();
+
+
+                Console.WriteLine($"{header.DesPort} {header.WindowSize} {header._TCPHeader12_14.HeaderSize} {header._TCPHeader12_14.TCPFlag}"); ;
+
             }
         }
 
@@ -68,16 +73,16 @@ namespace TestIPTCP
 
             socket.Bind(new IPEndPoint(IPAddress.Parse("192.168.1.106"), 5050));
 
-            byte[] buffer = new byte[65536];
-
-            var stream = new IPProtocol(new UDPProtocol());
+            IPLayer layer = IPLayer.Init(new IPLayerInfo(
+                (buffer, offset, count) => socket.Receive(buffer, offset, count, SocketFlags.None),
+                (buffer, offset, count) => socket.Send(buffer, offset, count, SocketFlags.None)));
             while (true)
             {
-                int n = socket.Receive(buffer);
 
-                stream.WritePacket(buffer);
+                var up = layer.TakeUPPacket();
 
-                Thread.Sleep(1000);
+                Console.WriteLine($"{up.IPData.SourceAddress} {up.IPData.DesAddress} {up.IPData.Protocol}");
+
             }
         }
 

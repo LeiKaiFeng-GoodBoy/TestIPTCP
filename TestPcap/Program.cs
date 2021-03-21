@@ -4,6 +4,7 @@ using System.Linq;
 using System.Net;
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Threading;
 using LeiKaiFeng.TCPIP;
 using PcapDotNet.Base;
 using PcapDotNet.Core;
@@ -59,18 +60,33 @@ namespace Test
                                                                          PacketDeviceOpenAttributes.Promiscuous, // promiscuous mode
                                                                          1000)) // read timeout
             {
+                IPLayer layer = IPLayer.Init(new IPLayerInfo(
+                (buffer, offset, count) => { Thread.Sleep(-1); return 0; },
+                (buffer, offset, count) => BuildMy(communicator, buffer, offset, count)));
+
+
 
                 for (int i = 0; i < 1000; i++)
                 {
-                    communicator.SendPacket(BuildMy());
-                }
 
+                    var packet = layer.CreateDownPacket();
+
+                    packet.Write(
+                        new IPv4Address(192, 168, 1, 106),
+                        50,
+                        new IPv4Address(192, 168, 1, 105),
+                        56,
+                        456
+                         );
+
+                    layer.AddDownPacket(packet);
+                }
             }
 
             Console.ReadLine();
         }
 
-        static Packet BuildMy()
+        static void BuildMy(PacketCommunicator communicator, byte[] buffer, int offset, int count)
         {
 
             EthernetLayer ethernetLayer =
@@ -81,18 +97,11 @@ namespace Test
                     EtherType = EthernetType.IpV4,
                 };
 
-            var source = new IPProtocol(new UDPProtocol());
-
-
-            byte[] buffer = new byte[1024];
-
-            var count = source.ReadPacket(buffer);
-
-            MyLayer myLayer = new MyLayer(buffer.AsSpan(0, count).ToArray());
+            MyLayer myLayer = new MyLayer(buffer.AsSpan(offset, count).ToArray());
 
             PacketBuilder builder = new PacketBuilder(ethernetLayer, myLayer);
 
-            return builder.Build(DateTime.Now);
+            communicator.SendPacket(builder.Build(DateTime.Now));
         }
 
         /// <summary>
