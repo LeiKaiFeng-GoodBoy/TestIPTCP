@@ -160,19 +160,19 @@ namespace LeiKaiFeng.TCPIP
     [StructLayout(LayoutKind.Auto)]
     public readonly struct Quaternion : IEquatable<Quaternion>
     {
-        public Quaternion(IPv4EndPoint left, IPv4EndPoint right)
+        public Quaternion(IPv4EndPoint source, IPv4EndPoint des)
         {
-            Left = left;
-            Right = right;
+            Source = source;
+            Des = des;
         }
 
-        public IPv4EndPoint Left { get; }
+        public IPv4EndPoint Source { get; }
 
-        public IPv4EndPoint Right { get; }
+        public IPv4EndPoint Des { get; }
 
         public bool Equals(Quaternion other)
         {
-            return (Left, Right).Equals((other.Left, other.Right));
+            return (Source, Des).Equals((other.Source, other.Des));
         }
 
         public override bool Equals(object obj)
@@ -189,12 +189,12 @@ namespace LeiKaiFeng.TCPIP
 
         public override int GetHashCode()
         {
-            return (Left, Right).GetHashCode();
+            return (Source, Des).GetHashCode();
         }
 
         public override string ToString()
         {
-            return $"{Left} {Right}";
+            return $"{Source} {Des}";
         }
     }
 

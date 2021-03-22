@@ -1,14 +1,116 @@
 ﻿using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace LeiKaiFeng.TCPIP
 {
+
+    public sealed class TCPStream : Stream
+    {
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => true;
+
+        public override long Length => throw new NotImplementedException();
+
+        public override long Position { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
+
+        public override void Flush()
+        {
+            
+        }
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            return this.ReadAsync(buffer, offset, count).Result;
+        }
+
+        public override long Seek(long offset, SeekOrigin origin)
+        {
+            throw new NotImplementedException();
+        }
+
+        public override void SetLength(long value)
+        {
+            throw new NotImplementedException();
+        }
+
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            this.WriteAsync(buffer, offset, count).Wait();
+        }
+
+
+        public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        {
+            return base.WriteAsync(buffer, offset, count, cancellationToken);
+        }
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        {
+            return base.ReadAsync(buffer, offset, count, cancellationToken);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            base.Dispose(disposing);
+        }
+    }
+
+
+    public sealed class TCPLayerInfo
+    {
+        internal Dictionary<Quaternion, TCPStream> Dic { get; }
+
+        internal IPLayer IPLayer { get; }
+        
+
+    }
+
+    public sealed class TCPLayer
+    {
+        readonly object m_lock = new object();
+
+        readonly TCPLayerInfo m_info;
+
+        private TCPLayer(TCPLayerInfo info)
+        {
+            m_info = info ?? throw new ArgumentNullException(nameof(info));
+        }
+
+
+        //public static TCPLayer Init(TCPLayerInfo info)
+        //{
+
+        //}
+
+
+        //void Read()
+        //{
+        //    UPPacket packet = m_info.IPLayer.TakeUPPacket();
+
+
+        //    TCPData tcpData = packet.ReadTCPData();
+
+            
+
+
+
+
+
+        //}
+    }
+
 
     [StructLayout(LayoutKind.Auto)]
     public readonly struct IPData
@@ -27,6 +129,53 @@ namespace LeiKaiFeng.TCPIP
         public Protocol Protocol { get; }
     }
 
+
+    [StructLayout(LayoutKind.Auto)]
+    public readonly struct TCPData
+    {
+        public ushort SourcePort { get; }
+
+        public ushort DesPort { get; }
+
+        public TCPFlag TCPFlag { get; }
+
+        public ushort WindowSize { get; }
+
+        public uint SequenceNumber { get; }
+
+        public uint AcknowledgmentNumber { get; }
+
+
+
+
+        public TCPData(ref TCPHeader header)
+        {
+
+            SourcePort = header.SourcePort;
+
+            DesPort = header.DesPort;
+
+            TCPFlag = header.TCPFlag;
+
+            WindowSize = header.WindowSize;
+
+            SequenceNumber = header.SequenceNumber;
+
+            AcknowledgmentNumber = header.AcknowledgmentNumber;
+
+        }
+
+        public TCPData(ushort sourcePort, ushort desPort, TCPFlag tCPFlag, ushort windowSize, uint sequenceNumber, uint acknowledgmentNumber)
+        {
+            SourcePort = sourcePort;
+            DesPort = desPort;
+            TCPFlag = tCPFlag;
+            WindowSize = windowSize;
+            SequenceNumber = sequenceNumber;
+            AcknowledgmentNumber = acknowledgmentNumber;
+        }
+    }
+
     [StructLayout(LayoutKind.Auto)]
     public sealed class UPPacket
     {
@@ -38,7 +187,11 @@ namespace LeiKaiFeng.TCPIP
         
         int Count { get; set; }
 
+        public Span<byte> Data => Array.AsSpan(Offset, Count);
+
         public IPData IPData { get; private set; }
+
+        public TCPData TCPData { get; private set; }
 
         internal bool ReadIPPackeet(Func<byte[], int, int, int> func)
         {
@@ -70,15 +223,36 @@ namespace LeiKaiFeng.TCPIP
 
                 Count -= IPHeader.HEADER_SIZE;
 
-                return true;
+                if (header.Protocol == Protocol.TCP)
+                {
+                    ReadTCPData();
+
+
+                    return true;
+                }
+                else
+                {
+                    return false;
+                }
+
             }
         }
 
-        public TCPHeader TCPHeader()
+
+        void ReadTCPData()
         {
-            return Meth.AsStruct<TCPHeader>(Array.AsSpan(Offset));
+            ref TCPHeader header = ref Meth.AsStruct<TCPHeader>(Array.AsSpan(Offset));
+
+            int headerSize = header.AllHeaderSize;
+
+            Offset += headerSize;
+
+            Count -= headerSize;
+
+            TCPData = new TCPData(ref header);
         }
 
+       
         internal UPPacket(int size, PacketPool<UPPacket> packetPool)
         {
             PacketPool = packetPool;
@@ -111,8 +285,6 @@ namespace LeiKaiFeng.TCPIP
         //而不是缓冲区可以使用的长度
         int Count { get; set; }
 
-
-        public IPData IPData { get; private set; }
 
         int Copy(Span<byte> buffer)
         {
@@ -149,8 +321,7 @@ namespace LeiKaiFeng.TCPIP
             uint acknowledgmentNumber,
             Span<byte> buffer)
         {
-            IPData = new IPData(sourceAddress, desAddress, Protocol.TCP);
-
+            
             int count = Copy(buffer);
 
             Offset -= TCPHeader.HEADER_SIZE;
@@ -171,18 +342,18 @@ namespace LeiKaiFeng.TCPIP
                 acknowledgmentNumber,
                 Array.AsSpan(Offset, Count));
 
+            WriteIPHeader(new IPData(sourceAddress, desAddress, Protocol.TCP));
+
             return count;
         }
 
         internal void WriteIPPacket(Action<byte[], int, int> action)
         {
-            WriteIPHeader();
-
             action(Array, Offset, Count);
         }
 
 
-        void WriteIPHeader()
+        void WriteIPHeader(IPData data)
         {
             int count = Count;
 
@@ -193,7 +364,7 @@ namespace LeiKaiFeng.TCPIP
             ref IPHeader header = ref Meth.AsStruct<IPHeader>(Array.AsSpan(Offset));
 
             //之前有限制所以转换会不溢出
-            IPHeader.Set(ref header, IPData, (ushort)count);
+            IPHeader.Set(ref header, data, (ushort)count);
         }
 
         internal DownPacket(int size, PacketPool<DownPacket> packetPool)

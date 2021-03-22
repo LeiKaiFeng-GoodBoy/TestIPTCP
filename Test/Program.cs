@@ -9,7 +9,17 @@ namespace Test
 {
     class Program
     {
-        
+        static void SendTcp()
+        {
+            Socket connect = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+
+            connect.Connect(new IPEndPoint(IPAddress.Loopback, 80));
+
+            while (true)
+            {
+                connect.Send(new byte[65536]);
+            }
+        }
 
         static void SendUdp()
         {

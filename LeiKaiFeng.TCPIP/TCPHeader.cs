@@ -25,13 +25,7 @@ namespace LeiKaiFeng.TCPIP
 
 
         [FieldOffset(1)]
-        public byte _Byte_1;
-
-
-        public byte HeaderSize => (byte)(_Byte_0 >> 4);
-
-
-        public TCPFlag TCPFlag => (TCPFlag)_Byte_1;
+        public byte _Byte_1;     
     }
 
 
@@ -55,7 +49,7 @@ namespace LeiKaiFeng.TCPIP
 
 
         [FieldOffset(12)]
-        public TCPHeader12_14 _TCPHeader12_14;
+        TCPHeader12_14 _TCPHeader12_14;
 
         [FieldOffset(14)]
         ushort _WindowSize;
@@ -82,6 +76,11 @@ namespace LeiKaiFeng.TCPIP
 
         public ushort WindowSize => Meth.AsBigEndian(_WindowSize);
 
+        public byte HeaderSize => (byte)(_TCPHeader12_14._Byte_0 >> 4);
+
+        public TCPFlag TCPFlag => (TCPFlag)_TCPHeader12_14._Byte_1;
+
+        public int AllHeaderSize => HeaderSize * 4;
 
         public static void Set(
             ref TCPHeader header,

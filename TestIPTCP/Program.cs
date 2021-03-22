@@ -15,6 +15,23 @@ namespace TestIPTCP
     class Program
     {
 
+        static void Tcp()
+        {
+            Socket listen = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+
+            listen.Bind(new IPEndPoint(IPAddress.Loopback, 80));
+
+            listen.Listen(0);
+
+            listen.ReceiveBufferSize = 4096;
+            Socket connect = listen.Accept();
+
+
+            Console.ReadLine();
+
+
+        }
+
         static void UdpRead(Socket socket)
         {
 
@@ -28,10 +45,27 @@ namespace TestIPTCP
                 var packet = la.TakeUPPacket();
 
 
-                var header = packet.TCPHeader();
+                var header = packet.TCPData;
 
 
-                Console.WriteLine($"{header.DesPort} {header.WindowSize} {header._TCPHeader12_14.HeaderSize} {header._TCPHeader12_14.TCPFlag}"); ;
+                Console.WriteLine(Encoding.UTF8.GetString(packet.Data));
+
+                var dowwnpacket = la.CreateDownPacket();
+
+
+                dowwnpacket.WriteTCP(
+                    packet.IPData.DesAddress,
+                    header.DesPort,
+                    packet.IPData.SourceAddress,
+                    header.SourcePort,
+                    TCPFlag.ACK |  TCPFlag.SYN,
+                    65535,
+                    1234,
+                    header.SequenceNumber + 1,
+                    default);
+
+                packet.Recycle();
+                la.AddDownPacket(dowwnpacket);
 
             }
         }

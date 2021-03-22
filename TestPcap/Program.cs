@@ -80,7 +80,7 @@ namespace Test
                         65535,
                         45,
                         4563434,
-                        default);
+                        new byte[1]);
 
                     layer.AddDownPacket(packet);
                 }
