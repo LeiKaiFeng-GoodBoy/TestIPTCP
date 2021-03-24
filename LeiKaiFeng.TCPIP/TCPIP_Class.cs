@@ -8,6 +8,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
+using System.Threading.Channels;
 using System.Threading.Tasks;
 
 namespace LeiKaiFeng.TCPIP
@@ -68,21 +69,238 @@ namespace LeiKaiFeng.TCPIP
     }
 
 
-
-    public sealed partial class TCPStream : Stream
+    sealed class BufferItem
     {
-        public TCPStream(Quaternion quaternion, uint acknowledgmentNumber, uint sequenceNumber)
+        readonly byte[] m_buffer;
+
+        int m_readOffset;
+
+        int m_readCount;
+
+        int m_writeOffset;
+
+        int m_writeCount;
+
+        public BufferItem()
         {
+            m_buffer = new byte[ushort.MaxValue];
+
+            m_readCount = 0;
+
+            m_readOffset = 0;
+
+            m_writeCount = m_buffer.Length;
+
+            m_writeOffset = 0;
+        }
+
+        static int CopyTo(byte[] sourceBuffer, int sourceOffset, int sourceCount,
+                           byte[] desBuffer, int desOffset, int desCount)
+        {
+            var source = sourceBuffer.AsSpan(sourceOffset, sourceCount);
+
+            var des = desBuffer.AsSpan(desOffset, desCount);
+
+
+            if (source.Length > des.Length)
+            {
+                source.Slice(0, des.Length).CopyTo(des);
+
+                return des.Length;
+            }
+            else
+            {
+                source.CopyTo(des);
+
+                return source.Length;
+            }
+        }
+
+        void ReadAdd(int n)
+        {
+            m_readOffset += n;
+
+            m_readCount -= n;
+
+            m_writeCount += n;
+
+        }
+
+
+        void WriteAdd(int n)
+        {
+            m_writeOffset += n;
+
+            m_writeCount -= n;
+
+            m_readCount += n;
+        }
+
+       
+        public int Write(byte[] buffer, int offset, int count)
+        {
+            return Copy(m_buffer, ref m_writeOffset, ref m_writeCount,
+                buffer, offset, count,
+                WriteAdd,
+                (source, sourceOffset, sourceCount,
+                desbuffer, desoffset, descount) =>
+                CopyTo(desbuffer, desoffset, descount,
+                    source, sourceOffset, sourceCount));
+        }
+
+        public int Read(byte[] buffer, int offset, int count)
+        {
+            return Copy(m_buffer, ref m_readOffset, ref m_readCount,
+                buffer, offset, count,
+                ReadAdd,
+                (source, sourceOffset, sourceCount,
+                desbuffer, desoffset, descount) =>
+                CopyTo(source, sourceOffset, sourceCount,
+                desbuffer, desoffset, descount));
+        }
+
+        static int Copy(
+            byte[] source, ref int sourceOffset, ref int sourceCount,
+            byte[] buffer, int offset, int count,
+            Action<int> add,
+            Func<byte[], int, int, byte[], int, int, int> copy)
+        {
+
+            int allCount = sourceOffset + sourceCount;
+
+            
+            if (allCount > source.Length)
+            {
+
+                int n = copy(source, sourceOffset, source.Length - sourceOffset,
+                               buffer, offset, count);
+
+
+                add(n);
+
+                if (sourceOffset >= source.Length)
+                {
+                    sourceOffset -= source.Length;
+
+                    offset += n;
+
+                    count -= n;
+
+                    return n + Copy(source, ref sourceOffset, ref sourceCount,
+                                 buffer, offset, count,
+                                 add,
+                                 copy);
+                }
+                else
+                {
+                    return n;
+                }
+            }
+            else
+            {
+                //偏移是0，计数最大
+                //偏移最大，计数是0，
+                //偏移和计数的和小于总长度
+                //因为if的条件所以当前writeOffset不会越界，也无需调整
+                int n = copy(source, sourceOffset, sourceCount,
+                               buffer, offset, count);
+
+
+                add(n);
+
+                return n;
+            }
+
+
+        }
+    }
+
+
+    sealed class UPBuffer
+    {
+        byte[] m_buffer_0;
+
+        byte[] m_buffer_1;
+
+
+    }
+
+    sealed class TCPStreamInfo
+    {
+        public TCPStreamInfo(Quaternion quaternion, uint acknowledgmentNumber, uint sequenceNumber)
+        {
+            var channel = Channel.CreateBounded<UPPacket>(6);
+
+            ChannelReader = channel;
+
+            ChannelWriter = channel;
+
             Quaternion = quaternion;
             AcknowledgmentNumber = acknowledgmentNumber;
             SequenceNumber = sequenceNumber;
         }
 
-        public Quaternion Quaternion { get; }
+        internal ChannelWriter<UPPacket> ChannelWriter { get; }
 
-        public uint AcknowledgmentNumber { get; }
+        internal ChannelReader<UPPacket> ChannelReader { get; }
 
-        public uint SequenceNumber { get; }
+        internal Quaternion Quaternion { get; }
+
+        internal uint AcknowledgmentNumber { get; set; }
+
+        internal uint SequenceNumber { get; set; }
+
+    }
+
+    public sealed partial class TCPStream : Stream
+    {
+        private readonly object m_lock = new object();
+
+        readonly TCPStreamInfo m_info;
+
+        public TCPStream(Quaternion quaternion, uint acknowledgmentNumber, uint sequenceNumber)
+        {
+
+            m_info = new TCPStreamInfo(quaternion, acknowledgmentNumber, sequenceNumber);
+        }
+
+        
+        void SendACK(uint ackSeq, ushort WindwsSize)
+        {
+
+        }
+
+        internal Task<int> ReadAsync(byte[] buffer, int offset, int size)
+        {
+            m_info.ChannelReader.read
+        }
+
+       
+        internal void WritePacket(UPPacket packet)
+        {
+            lock (m_lock)
+            {
+                if (packet.TCPData.SequenceNumber == m_info.AcknowledgmentNumber)
+                {
+                    uint n = (uint)packet.Data.Length;
+
+                    if (m_info.ChannelWriter.TryWrite(packet))
+                    {
+                        m_info.AcknowledgmentNumber += n;
+
+                        SendACK(m_info.AcknowledgmentNumber, ushort.MaxValue);
+                    }
+                    else
+                    {
+                        SendACK(m_info.AcknowledgmentNumber, 0);
+                    }
+                }
+                else
+                {
+                    Console.WriteLine("TCP乱序包到达");
+                }
+            }
+        }
     }
 
     public sealed class TCPLayerInfo
@@ -177,6 +395,20 @@ namespace LeiKaiFeng.TCPIP
             }
         }
 
+        public static void AddPacket(TCPLayerInfo info, UPPacket packet)
+        {
+            if (info.Dic.ContainsKey(packet.Quaternion))
+            {
+                TCPStream stream = info.Dic[packet.Quaternion];
+
+                
+            }
+            else
+            {
+                Console.WriteLine("一个没有建立连接的包");
+            }
+        }
+
 
         public static void Add(TCPLayerInfo info, UPPacket packet)
         {
@@ -194,7 +426,7 @@ namespace LeiKaiFeng.TCPIP
             }
             else
             {
-
+                
             }
         }
     }
