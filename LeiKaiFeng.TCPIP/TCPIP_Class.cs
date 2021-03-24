@@ -13,7 +13,7 @@ using System.Threading.Tasks;
 namespace LeiKaiFeng.TCPIP
 {
 
-    public sealed class TCPStream : Stream
+    public sealed partial class TCPStream : Stream
     {
         public override bool CanRead => true;
 
@@ -68,30 +68,42 @@ namespace LeiKaiFeng.TCPIP
     }
 
 
+
+    public sealed partial class TCPStream : Stream
+    {
+        public TCPStream(Quaternion quaternion, uint acknowledgmentNumber, uint sequenceNumber)
+        {
+            Quaternion = quaternion;
+            AcknowledgmentNumber = acknowledgmentNumber;
+            SequenceNumber = sequenceNumber;
+        }
+
+        public Quaternion Quaternion { get; }
+
+        public uint AcknowledgmentNumber { get; }
+
+        public uint SequenceNumber { get; }
+    }
+
     public sealed class TCPLayerInfo
     {
+        public TCPLayerInfo(IPLayer iPLayer, Action<TCPStream> intoConnect)
+        {
+            IPLayer = iPLayer ?? throw new ArgumentNullException(nameof(iPLayer));
+            IntoConnect = intoConnect ?? throw new ArgumentNullException(nameof(intoConnect));
+
+            Dic = new Dictionary<Quaternion, TCPStream>();
+
+            HPDic = new Dictionary<Quaternion, HandshakePhase>();
+        }
+
         internal Dictionary<Quaternion, TCPStream> Dic { get; }
 
         internal Dictionary<Quaternion, HandshakePhase> HPDic { get; }
 
         internal IPLayer IPLayer { get; }
         
-
-    }
-
-    public readonly struct TCPNumber
-    {
-        public TCPNumber(uint acknowledgmentNumber, uint sequenceNumber)
-        {
-            AcknowledgmentNumber = acknowledgmentNumber;
-            SequenceNumber = sequenceNumber;
-        }
-
-        public uint AcknowledgmentNumber { get; }
-
-        public uint SequenceNumber { get; }
-
-
+        internal Action<TCPStream> IntoConnect { get; }
     }
 
     //一开始C发送一个起始序号CX，确认序号无意义
@@ -99,59 +111,91 @@ namespace LeiKaiFeng.TCPIP
     //然后C发送一个确认序号SX+1，发送一个起始序号CX+1
     //也就是说对面发送的是我确认的
 
-    public sealed class HandshakePhase
+    sealed class HandshakePhase
     {
-        public HandshakePhase(Quaternion quaternion, uint sequenceNumber, uint acknowledgmentNumber)
+        public HandshakePhase(uint sequenceNumber, uint acknowledgmentNumber)
         {
-            Quaternion = quaternion;
             SequenceNumber = sequenceNumber;
             AcknowledgmentNumber = acknowledgmentNumber;
         }
-
-        Quaternion Quaternion { get; }
 
         uint SequenceNumber { get; set; }
 
         uint AcknowledgmentNumber { get; set; }
 
 
-        public static void Init(TCPLayerInfo info, Quaternion quaternion, UPPacket upPacket)
-        {
-           
-            if (info.HPDic.ContainsKey(quaternion))
+        public static void Init(TCPLayerInfo info, UPPacket upPacket)
+        {      
+            if (info.HPDic.ContainsKey(upPacket.Quaternion))
             {
-
+                Console.WriteLine("已经存在了一个进行中的握手");
             }
             else
             {
+                //我的开头编号用别人的，我就不用自己管理了
+                uint seq = upPacket.TCPData.SequenceNumber;
                 uint ackSeq = upPacket.TCPData.SequenceNumber + 1;
-                uint seq = 0;
-
 
                 DownPacket downPacket = info.IPLayer.CreateDownPacket();
 
                 downPacket.WriteTCP(
-                    quaternion,
+                    upPacket.Quaternion,
                     TCPFlag.ACK | TCPFlag.SYN,
                     ushort.MaxValue,
                     seq,
                     ackSeq,
                     default);
 
+                info.IPLayer.AddDownPacket(downPacket);
+
                
                 HandshakePhase handshakePhase = new HandshakePhase(
-                    quaternion,
                     seq,
                     ackSeq);
 
-                info.HPDic.Add(quaternion, handshakePhase);
+                info.HPDic.Add(upPacket.Quaternion, handshakePhase);
+
+                Console.WriteLine("一个握手开始");
+            }
+        }
+
+        static void Add(TCPLayerInfo info, UPPacket packet, HandshakePhase handshake)
+        {
+            if (info.Dic.ContainsKey(packet.Quaternion))
+            {
+                Console.WriteLine("握手成功一个，但已经存在了一个TCP");
+            }
+            else
+            {
+                Console.WriteLine("握手成功一个");
+
+                TCPStream stream = new TCPStream(packet.Quaternion, handshake.AcknowledgmentNumber, handshake.SequenceNumber);
+
+                info.Dic.Add(packet.Quaternion, stream);
+
+                Task.Run(() => info.IntoConnect(stream));
             }
         }
 
 
-        public void Add(UPPacket packet)
+        public static void Add(TCPLayerInfo info, UPPacket packet)
         {
-            
+            if (info.HPDic.ContainsKey(packet.Quaternion))
+            {
+                HandshakePhase handshake = info.HPDic[packet.Quaternion];
+
+                info.HPDic.Remove(packet.Quaternion);
+
+                handshake.SequenceNumber = packet.TCPData.AcknowledgmentNumber;
+
+                handshake.AcknowledgmentNumber = packet.TCPData.SequenceNumber;
+
+                Add(info, packet, handshake);
+            }
+            else
+            {
+
+            }
         }
     }
 
@@ -167,45 +211,48 @@ namespace LeiKaiFeng.TCPIP
         }
 
 
-        //public static TCPLayer Init(TCPLayerInfo info)
-        //{
+        public static TCPLayer Init(TCPLayerInfo info, Action<Exception> logAction)
+        {
+            TCPLayer layer = new TCPLayer(info);
 
-        //}
+            Meth.CreateThreadAndRun(layer.ReadLoop, logAction);
+
+            return layer;
+        }
+
+        void ReadLoop()
+        {
+            while (true)
+            {
+                Read();
+            }
+        }
 
 
         void Read()
         {
+
             UPPacket packet = m_info.IPLayer.TakeUPPacket();
 
 
-            Quaternion quaternion = packet.Quaternion;
-
             TCPFlag flag = packet.TCPData.TCPFlag;
-          
+
             if (flag == TCPFlag.SYN)
             {
-                HandshakePhase.Init(m_info, quaternion, packet);
+                HandshakePhase.Init(m_info, packet);
             }
-            else if (Meth.HasFlag(flag, TCPFlag.RST))
-            {
-
-            }
-            else if (Meth.HasFlag(flag, TCPFlag.FIN))
+            else if (Meth.HasFlag(flag, TCPFlag.RST | TCPFlag.FIN))
             {
 
             }
             else if (Meth.HasFlag(flag, TCPFlag.ACK))
             {
-                
+                HandshakePhase.Add(m_info, packet);
             }
             else
             {
 
             }
-
-
-
-
 
 
         }
@@ -592,27 +639,14 @@ namespace LeiKaiFeng.TCPIP
         {
             IPLayer ipLayer = new IPLayer(info);
 
-            CreateThreadAndRun(ipLayer.Read, logAction);
+            Meth.CreateThreadAndRun(ipLayer.Read, logAction);
 
-            CreateThreadAndRun(ipLayer.Write, logAction);
+            Meth.CreateThreadAndRun(ipLayer.Write, logAction);
 
             return ipLayer;
         }
 
-        static void CreateThreadAndRun(Action action, Action<Exception> logAction)
-        {
-            new Thread(() =>
-            {
-                try
-                {
-                    action();
-                }
-                catch (Exception e)
-                {
-                    logAction(e);
-                }
-            }).Start();
-        }
+        
 
         void Write()
         {

@@ -134,32 +134,13 @@ namespace TestIPTCP
                 ReadUDPAndWir(socket, wir),
                 WriteUDPAndWir(socket, wir)));
 
-            while (true)
-            {
 
-                var packet = la.TakeUPPacket();
+            TCPLayerInfo layerInfo = new TCPLayerInfo(la, (tcp) => Console.WriteLine(tcp.Quaternion));
 
+            var tcp = TCPLayer.Init(layerInfo, (e) => Console.WriteLine(e));
 
-                var header = packet.TCPData;
+            Console.Read();
 
-                Console.WriteLine(packet.Quaternion.Reverse());
-
-                Console.WriteLine(Encoding.UTF8.GetString(packet.Data));
-
-                var dowwnpacket = la.CreateDownPacket();
-
-                dowwnpacket.WriteTCP(
-                    packet.Quaternion,
-                    TCPFlag.RST | TCPFlag.ACK,
-                    0,
-                    0,
-                    header.SequenceNumber + 1,
-                    default);
-
-                packet.Recycle();
-                la.AddDownPacket(dowwnpacket);
-
-            }
         }
 
 

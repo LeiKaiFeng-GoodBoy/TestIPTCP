@@ -2,6 +2,7 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Linq;
+using System.Threading;
 
 namespace LeiKaiFeng.TCPIP
 {
@@ -13,6 +14,21 @@ namespace LeiKaiFeng.TCPIP
         public static ushort GetCount()
         {
             return (ushort)(++s_count);
+        }
+
+        public static void CreateThreadAndRun(Action action, Action<Exception> logAction)
+        {
+            new Thread(() =>
+            {
+                try
+                {
+                    action();
+                }
+                catch (Exception e)
+                {
+                    logAction(e);
+                }
+            }).Start();
         }
 
 
