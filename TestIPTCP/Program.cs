@@ -8,6 +8,7 @@ using System.Linq;
 using LeiKaiFeng.TCPIP;
 using System.Text;
 using System.Threading;
+using Wireshark;
 
 namespace TestIPTCP
 {
@@ -31,13 +32,107 @@ namespace TestIPTCP
 
 
         }
+        static int WriteDes(byte[] buffer)
+        {
+            Span<byte> span = stackalloc byte[] {
+                0x48,
+                0x7d,
+                0x2e,
+                0x81,
+                0xd1,
+                0x37,
+                0x00,
+                0x08,
+                0xca,
+                0xc1,
+                0x87,
+                0xa9,
+                0x08,
+                0x00
+            };
+
+
+            span.CopyTo(buffer);
+
+
+            return span.Length;
+        }
+
+
+        static int WriteSource(byte[] buffer)
+        {
+            Span<byte> span = stackalloc byte[] {
+                0x00,
+                0x08,
+                0xca,
+                0xc1,
+                0x87,
+                0xa9,
+                0x48,
+                0x7d,
+                0x2e,
+                0x81,
+                0xd1,
+                0x37,
+                0x08,
+                0x00
+            };
+
+            span.CopyTo(buffer);
+
+            return span.Length;
+        }
+
+        static Action<byte[], int,int> WriteUDPAndWir(Socket socket, WiresharkSender sender)
+        {
+            byte[] readArray = new byte[75536];
+
+            int index = WriteDes(readArray);
+
+
+            return (buffer, offset, count) =>
+            {
+                buffer.AsSpan(offset, count).CopyTo(readArray.AsSpan(index));
+
+
+
+                sender.SendToWireshark(readArray, 0, index + count);
+
+
+                socket.Send(readArray, index, count, SocketFlags.None);
+
+            };
+        }
+
+        static Func<byte[], int, int, int> ReadUDPAndWir(Socket socket, WiresharkSender sender)
+        {
+            
+            byte[] readArray = new byte[75536];
+
+            int index = WriteSource(readArray);
+
+
+            return (buffer, offset, count) =>
+            {
+                int n = socket.Receive(readArray, index, readArray.Length - index, SocketFlags.None);
+
+
+                sender.SendToWireshark(readArray, 0, n + index);
+
+                readArray.AsSpan(index, n).CopyTo(buffer.AsSpan(offset, count));
+
+                return n;
+            };
+        }
 
         static void UdpRead(Socket socket)
         {
+            //\\.\pipe\bacnet
+            var wir = WiresharkSender.Create("MMYY");
 
             var la = IPLayer.Init(new IPLayerInfo(
-                (buffer, offst, count) => socket.Receive(buffer, offst, count, SocketFlags.None),
-                (buffer, offset, count) => socket.Send(buffer, offset, count, SocketFlags.None)));
+                ReadUDPAndWir(socket, wir),
+                WriteUDPAndWir(socket, wir)));
 
             while (true)
             {
@@ -47,20 +142,17 @@ namespace TestIPTCP
 
                 var header = packet.TCPData;
 
+                Console.WriteLine(packet.Quaternion.Reverse());
 
                 Console.WriteLine(Encoding.UTF8.GetString(packet.Data));
 
                 var dowwnpacket = la.CreateDownPacket();
 
-
                 dowwnpacket.WriteTCP(
-                    packet.IPData.DesAddress,
-                    header.DesPort,
-                    packet.IPData.SourceAddress,
-                    header.SourcePort,
-                    TCPFlag.ACK |  TCPFlag.SYN,
-                    65535,
-                    1234,
+                    packet.Quaternion,
+                    TCPFlag.RST | TCPFlag.ACK,
+                    0,
+                    0,
                     header.SequenceNumber + 1,
                     default);
 
@@ -97,6 +189,7 @@ namespace TestIPTCP
             socket.Bind(new IPEndPoint(IPAddress.Parse("192.168.1.106"), 5050));
 
             socket.Connect(new IPEndPoint(IPAddress.Parse("192.168.1.105"), 5050));
+
             UdpRead(socket);
         }
 

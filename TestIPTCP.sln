@@ -9,7 +9,9 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Test", "Test\Test.csproj", 
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TestPcap", "TestPcap\TestPcap.csproj", "{2095BE07-CA3E-497B-BBCB-30E3F6CF0A4C}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LeiKaiFeng.TCPIP", "LeiKaiFeng.TCPIP\LeiKaiFeng.TCPIP.csproj", "{612C1AED-3079-450F-A823-FDC33A25A1BC}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "LeiKaiFeng.TCPIP", "LeiKaiFeng.TCPIP\LeiKaiFeng.TCPIP.csproj", "{612C1AED-3079-450F-A823-FDC33A25A1BC}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "TestVpn", "TestVpn\TestVpn.csproj", "{D2C9182E-5AFB-4BD2-B64D-8ED654CC91EF}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -50,6 +52,14 @@ Global
 		{612C1AED-3079-450F-A823-FDC33A25A1BC}.Release|Any CPU.Build.0 = Release|Any CPU
 		{612C1AED-3079-450F-A823-FDC33A25A1BC}.Release|x64.ActiveCfg = Release|Any CPU
 		{612C1AED-3079-450F-A823-FDC33A25A1BC}.Release|x64.Build.0 = Release|Any CPU
+		{D2C9182E-5AFB-4BD2-B64D-8ED654CC91EF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D2C9182E-5AFB-4BD2-B64D-8ED654CC91EF}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D2C9182E-5AFB-4BD2-B64D-8ED654CC91EF}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{D2C9182E-5AFB-4BD2-B64D-8ED654CC91EF}.Debug|x64.Build.0 = Debug|Any CPU
+		{D2C9182E-5AFB-4BD2-B64D-8ED654CC91EF}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D2C9182E-5AFB-4BD2-B64D-8ED654CC91EF}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D2C9182E-5AFB-4BD2-B64D-8ED654CC91EF}.Release|x64.ActiveCfg = Release|Any CPU
+		{D2C9182E-5AFB-4BD2-B64D-8ED654CC91EF}.Release|x64.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

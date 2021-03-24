@@ -72,9 +72,87 @@ namespace LeiKaiFeng.TCPIP
     {
         internal Dictionary<Quaternion, TCPStream> Dic { get; }
 
+        internal Dictionary<Quaternion, HandshakePhase> HPDic { get; }
+
         internal IPLayer IPLayer { get; }
         
 
+    }
+
+    public readonly struct TCPNumber
+    {
+        public TCPNumber(uint acknowledgmentNumber, uint sequenceNumber)
+        {
+            AcknowledgmentNumber = acknowledgmentNumber;
+            SequenceNumber = sequenceNumber;
+        }
+
+        public uint AcknowledgmentNumber { get; }
+
+        public uint SequenceNumber { get; }
+
+
+    }
+
+    //一开始C发送一个起始序号CX，确认序号无意义
+    //我发一个确认序号CX+1， 发一个起始序号SX
+    //然后C发送一个确认序号SX+1，发送一个起始序号CX+1
+    //也就是说对面发送的是我确认的
+
+    public sealed class HandshakePhase
+    {
+        public HandshakePhase(Quaternion quaternion, uint sequenceNumber, uint acknowledgmentNumber)
+        {
+            Quaternion = quaternion;
+            SequenceNumber = sequenceNumber;
+            AcknowledgmentNumber = acknowledgmentNumber;
+        }
+
+        Quaternion Quaternion { get; }
+
+        uint SequenceNumber { get; set; }
+
+        uint AcknowledgmentNumber { get; set; }
+
+
+        public static void Init(TCPLayerInfo info, Quaternion quaternion, UPPacket upPacket)
+        {
+           
+            if (info.HPDic.ContainsKey(quaternion))
+            {
+
+            }
+            else
+            {
+                uint ackSeq = upPacket.TCPData.SequenceNumber + 1;
+                uint seq = 0;
+
+
+                DownPacket downPacket = info.IPLayer.CreateDownPacket();
+
+                downPacket.WriteTCP(
+                    quaternion,
+                    TCPFlag.ACK | TCPFlag.SYN,
+                    ushort.MaxValue,
+                    seq,
+                    ackSeq,
+                    default);
+
+               
+                HandshakePhase handshakePhase = new HandshakePhase(
+                    quaternion,
+                    seq,
+                    ackSeq);
+
+                info.HPDic.Add(quaternion, handshakePhase);
+            }
+        }
+
+
+        public void Add(UPPacket packet)
+        {
+            
+        }
     }
 
     public sealed class TCPLayer
@@ -95,20 +173,42 @@ namespace LeiKaiFeng.TCPIP
         //}
 
 
-        //void Read()
-        //{
-        //    UPPacket packet = m_info.IPLayer.TakeUPPacket();
+        void Read()
+        {
+            UPPacket packet = m_info.IPLayer.TakeUPPacket();
 
 
-        //    TCPData tcpData = packet.ReadTCPData();
+            Quaternion quaternion = packet.Quaternion;
 
-            
+            TCPFlag flag = packet.TCPData.TCPFlag;
+          
+            if (flag == TCPFlag.SYN)
+            {
+                HandshakePhase.Init(m_info, quaternion, packet);
+            }
+            else if (Meth.HasFlag(flag, TCPFlag.RST))
+            {
+
+            }
+            else if (Meth.HasFlag(flag, TCPFlag.FIN))
+            {
+
+            }
+            else if (Meth.HasFlag(flag, TCPFlag.ACK))
+            {
+                
+            }
+            else
+            {
+
+            }
 
 
 
 
 
-        //}
+
+        }
     }
 
 
@@ -192,6 +292,11 @@ namespace LeiKaiFeng.TCPIP
         public IPData IPData { get; private set; }
 
         public TCPData TCPData { get; private set; }
+
+        public Quaternion Quaternion =>
+            new Quaternion(
+                new IPv4EndPoint(IPData.SourceAddress, TCPData.SourcePort),
+                new IPv4EndPoint(IPData.DesAddress, TCPData.DesPort));
 
         internal bool ReadIPPackeet(Func<byte[], int, int, int> func)
         {
@@ -311,17 +416,16 @@ namespace LeiKaiFeng.TCPIP
         }
 
         public int WriteTCP(
-            IPv4Address sourceAddress,
-            ushort sourcePort,
-            IPv4Address desAddress,
-            ushort desPort,
+            Quaternion quaternion,
             TCPFlag tcpFlag,
             ushort windowSize,
             uint sequenceNumber,
             uint acknowledgmentNumber,
             Span<byte> buffer)
         {
-            
+
+            quaternion = quaternion.Reverse();
+
             int count = Copy(buffer);
 
             Offset -= TCPHeader.HEADER_SIZE;
@@ -332,17 +436,17 @@ namespace LeiKaiFeng.TCPIP
 
             TCPHeader.Set(
                 ref header,
-                sourceAddress,
-                sourcePort,
-                desAddress,
-                desPort,
+                quaternion.Source.Address,
+                quaternion.Source.Port,
+                quaternion.Des.Address,
+                quaternion.Des.Port,
                 tcpFlag,
                 windowSize,
                 sequenceNumber,
                 acknowledgmentNumber,
                 Array.AsSpan(Offset, Count));
 
-            WriteIPHeader(new IPData(sourceAddress, desAddress, Protocol.TCP));
+            WriteIPHeader(new IPData(quaternion.Source.Address, quaternion.Des.Address, Protocol.TCP));
 
             return count;
         }
@@ -536,8 +640,8 @@ namespace LeiKaiFeng.TCPIP
                 else
                 {
                     packet.Recycle();
-                   
-                    Console.WriteLine("已丢弃ip包");
+                    
+                    //Console.WriteLine("已丢弃ip包");
                 }
             }
         }

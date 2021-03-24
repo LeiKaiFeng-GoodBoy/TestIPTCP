@@ -67,6 +67,9 @@ namespace Test
 
         static void Main(string[] args)
         {
+            Console.WriteLine(string.Join<IPAddress>(" ",Dns.GetHostAddresses(Dns.GetHostName())));
+
+
             SendUdp();
             
         }

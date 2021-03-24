@@ -62,9 +62,14 @@ namespace Test
             {
                 IPLayer layer = IPLayer.Init(new IPLayerInfo(
                 (buffer, offset, count) => { Thread.Sleep(-1); return 0; },
-                (buffer, offset, count) => BuildMy(communicator, buffer, offset, count)));
+                (buffer, offset, count) => {
+                    BuildMy(communicator, buffer, offset, count);
 
+                }));
 
+                Quaternion quaternion = new Quaternion(new IPv4EndPoint(new IPv4Address(192, 168, 1, 106),
+                        50), new IPv4EndPoint(new IPv4Address(192,168,1,1),
+                        80)); 
 
                 for (int i = 0; i < 100; i++)
                 {
@@ -72,15 +77,13 @@ namespace Test
                     var packet = layer.CreateDownPacket();
 
                     packet.WriteTCP(
-                        new IPv4Address(192, 168, 1, 106),
-                        50,
-                        new IPv4Address(58, 254, 149, 226),
-                        80,
+                        
+                        quaternion,
                         TCPFlag.ACK | TCPFlag.SYN,
                         65535,
                         45,
                         4563434,
-                        new byte[1]);
+                        default);
 
                     layer.AddDownPacket(packet);
                 }

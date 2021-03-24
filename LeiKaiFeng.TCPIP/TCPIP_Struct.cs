@@ -170,6 +170,11 @@ namespace LeiKaiFeng.TCPIP
 
         public IPv4EndPoint Des { get; }
 
+        public Quaternion Reverse()
+        {
+            return new Quaternion(Des, Source);
+        }
+
         public bool Equals(Quaternion other)
         {
             return (Source, Des).Equals((other.Source, other.Des));

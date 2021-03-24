@@ -158,5 +158,21 @@ namespace LeiKaiFeng.TCPIP
 
             return AsSum(sum);
         }
+
+
+
+        public static bool HasFlag<T>(T left, T right) where T: struct, Enum
+        {
+           
+            int left_n = 0;
+
+            int right_n = 0;
+
+            Unsafe.As<int, T>(ref left_n) = left;
+
+            Unsafe.As<int, T>(ref right_n) = right;
+
+            return (left_n & right_n) != 0;
+        }
     }
 }
