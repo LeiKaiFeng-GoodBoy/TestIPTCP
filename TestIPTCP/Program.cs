@@ -135,7 +135,17 @@ namespace TestIPTCP
                 WriteUDPAndWir(socket, wir)));
 
 
-            TCPLayerInfo layerInfo = new TCPLayerInfo(la, (tcp) => Console.WriteLine(tcp.Quaternion));
+            TCPLayerInfo layerInfo = new TCPLayerInfo(la, (tcp) =>
+            {
+                Console.WriteLine(tcp.Quaternion);
+
+                byte[] buffer = new byte[2048];
+
+                int n = tcp.Read(buffer);
+
+                Console.WriteLine(Encoding.UTF8.GetString(buffer, 0, n));
+
+            });
 
             var tcp = TCPLayer.Init(layerInfo, (e) => Console.WriteLine(e));
 
