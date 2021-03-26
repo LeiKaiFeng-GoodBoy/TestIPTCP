@@ -127,15 +127,10 @@ namespace TestIPTCP
 
         static void UdpRead(Socket socket)
         {
-            //\\.\pipe\bacnet
+            //\\.\pipe\MMYY
             var wir = WiresharkSender.Create("MMYY");
 
-            var la = IPLayer.Init(new IPLayerInfo(
-                ReadUDPAndWir(socket, wir),
-                WriteUDPAndWir(socket, wir)));
-
-
-            TCPLayerInfo layerInfo = new TCPLayerInfo(la, (tcp) =>
+            TCPLayerInfo layerInfo = new TCPLayerInfo((tcp) =>
             {
                 Console.WriteLine(tcp.Quaternion);
 
@@ -149,6 +144,15 @@ namespace TestIPTCP
 
             var tcp = TCPLayer.Init(layerInfo, (e) => Console.WriteLine(e));
 
+
+            var la = IPLayer.Init(new IPLayerInfo(
+                ReadUDPAndWir(socket, wir),
+                WriteUDPAndWir(socket, wir),
+                tcp.UPPacket,
+                tcp.DownPacket));
+
+
+            
             Console.Read();
 
         }
@@ -179,30 +183,30 @@ namespace TestIPTCP
 
             socket.Bind(new IPEndPoint(IPAddress.Parse("192.168.1.106"), 5050));
 
-            socket.Connect(new IPEndPoint(IPAddress.Parse("192.168.1.105"), 5050));
+            socket.Connect(new IPEndPoint(IPAddress.Parse("192.168.1.104"), 5050));
 
             UdpRead(socket);
         }
 
-        static void Raw()
-        {
-            Socket socket = new Socket(AddressFamily.InterNetwork, SocketType.Raw, ProtocolType.IP);
+        //static void Raw()
+        //{
+        //    Socket socket = new Socket(AddressFamily.InterNetwork, SocketType.Raw, ProtocolType.IP);
 
 
-            socket.Bind(new IPEndPoint(IPAddress.Parse("192.168.1.106"), 5050));
+        //    socket.Bind(new IPEndPoint(IPAddress.Parse("192.168.1.106"), 5050));
 
-            IPLayer layer = IPLayer.Init(new IPLayerInfo(
-                (buffer, offset, count) => socket.Receive(buffer, offset, count, SocketFlags.None),
-                (buffer, offset, count) => socket.Send(buffer, offset, count, SocketFlags.None)));
-            while (true)
-            {
+        //    IPLayer layer = IPLayer.Init(new IPLayerInfo(
+        //        (buffer, offset, count) => socket.Receive(buffer, offset, count, SocketFlags.None),
+        //        (buffer, offset, count) => socket.Send(buffer, offset, count, SocketFlags.None)));
+        //    while (true)
+        //    {
 
-                var up = layer.TakeUPPacket();
+        //        var up = layer.TakeUPPacket();
 
-                Console.WriteLine($"{up.IPData.SourceAddress} {up.IPData.DesAddress} {up.IPData.Protocol}");
+        //        Console.WriteLine($"{up.IPData.SourceAddress} {up.IPData.DesAddress} {up.IPData.Protocol}");
 
-            }
-        }
+        //    }
+        //}
 
         static void Main()
         {
