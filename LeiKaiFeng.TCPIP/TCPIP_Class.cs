@@ -59,7 +59,7 @@ namespace LeiKaiFeng.TCPIP
 
         public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
         {
-            return m_info.ReadBuffer.Read(buffer, offset, count);
+            return m_info.BufferLoop.Read(buffer, offset, count);
         }
 
         protected override void Dispose(bool disposing)
@@ -68,33 +68,61 @@ namespace LeiKaiFeng.TCPIP
         }
     }
 
+    sealed class TCPStreamInfo
+    {
+        public TCPStreamInfo(TCPLayer tcpLauer, Quaternion quaternion, ushort myWindowSize, ushort desWindowSize, uint acknowledgmentNumber, uint sequenceNumber)
+        {
+            TCPLayer = tcpLauer;
+
+            BufferLoop = new BufferLoop();
+
+            BufferWindow = new BufferWindow();
+
+            Quaternion = quaternion;
+            MyWindowSize = myWindowSize;
+            DesWindowSize = desWindowSize;
+            AcknowledgmentNumber = acknowledgmentNumber;
+            SequenceNumber = sequenceNumber;
+
+            OlderAcknowledgmentNumber = OlderAcknowledgmentNumber;
+
+            AckCount = 0;
+
+            UsedAckCount = 0;
+        }
+
+        internal TCPLayer TCPLayer { get; }
+
+        internal BufferLoop BufferLoop { get; }
+
+        internal BufferWindow BufferWindow { get; }
+
+        internal Quaternion Quaternion { get; }
+
+        internal ushort MyWindowSize { get; set; }
+
+        internal ushort DesWindowSize { get; set; }
+
+        internal uint AcknowledgmentNumber { get; set; }
+
+        internal uint OlderAcknowledgmentNumber { get; set; }
+
+        internal uint SequenceNumber { get; set; }
+
+        internal ushort AckCount { get; set; }
+
+        internal ushort UsedAckCount { get; set; }
+
+
+
+    }
 
 
     public sealed partial class TCPStream : Stream
     {
-        sealed class Data
-        {
-            public Data(uint ackSeq, ushort desWindowSize, ushort myWindowSize)
-            {
-                AckSeq = ackSeq;
-                DesWindowSize = desWindowSize;
-                MyWindowSize = myWindowSize;
-            }
-
-            public uint AckSeq { get; }
-
-            public ushort DesWindowSize { get; }
-
-            public ushort MyWindowSize { get; }
-
-        }
-
-
-        private readonly object m_lock = new object();
+        
 
         readonly TCPStreamInfo m_info;
-
-        volatile Data m_data;
 
         public Quaternion Quaternion => m_info.Quaternion;
 
@@ -102,43 +130,100 @@ namespace LeiKaiFeng.TCPIP
         {
 
             m_info = info;
-
-            m_data = new Data(info.AcknowledgmentNumber, ushort.MaxValue, ushort.MaxValue);
         }
 
-
-        void SendACK(Data data)
+        uint GetAck()
         {
+            const ulong N = 0x01 << 32;
+
+            ulong n1 = N + m_info.AcknowledgmentNumber;
+
+            ulong n2 = m_info.OlderAcknowledgmentNumber;
+
+            uint n = (uint)(n1 - n2);
+
+
+            m_info.OlderAcknowledgmentNumber = m_info.AcknowledgmentNumber;
+
+            return n;
         }
 
+
+        void DownPacket(DownPacket downPacket)
+        {
+
+            if (m_info.UsedAckCount == m_info.AckCount)
+            {
+                int n = downPacket.Write(m_info.BufferWindow.Read);
+
+                m_info.SequenceNumber += (uint)n;
+
+                downPacket.WriteTCP(
+                    m_info.Quaternion,
+                    TCPFlag.ACK,
+                    m_info.MyWindowSize,
+                    m_info.SequenceNumber,
+                    m_info.AcknowledgmentNumber,
+                    default);
+            }
+            else
+            {
+                m_info.UsedAckCount = m_info.AckCount;
+
+                m_info.BufferWindow.SetAck((int)GetAck());
+
+                int n = downPacket.Write(m_info.BufferWindow.Read);
+
+                m_info.SequenceNumber += (uint)n;
+
+                downPacket.WriteTCP(
+                    m_info.Quaternion,
+                    TCPFlag.ACK,
+                    m_info.MyWindowSize,
+                    m_info.SequenceNumber,
+                    m_info.AcknowledgmentNumber,
+                    default);
+
+            }
+        }
+
+        void Send()
+        {
+            m_info.TCPLayer.AddDownPacket(DownPacket);
+        }
 
         internal void WritePacket(UPPacket packet)
         {
-            lock (m_lock)
+
+            m_info.AckCount++;
+
+            m_info.DesWindowSize = packet.TCPData.WindowSize;
+
+            m_info.SequenceNumber = packet.TCPData.AcknowledgmentNumber;
+
+            if (packet.TCPData.SequenceNumber == m_info.AcknowledgmentNumber)
             {
-                if (packet.TCPData.SequenceNumber == m_info.AcknowledgmentNumber)
-                {
 
-                    int n = m_info.ReadBuffer.Write(packet.Array, packet.Offset, packet.Count);
+                int n = m_info.BufferLoop.Write(packet.Array, packet.Offset, packet.Count);
 
-                    m_info.AcknowledgmentNumber += (uint)n;
+                m_info.AcknowledgmentNumber += (uint)n;
 
-                    var data = new Data(m_info.AcknowledgmentNumber, packet.TCPData.WindowSize, m_info.ReadBuffer.CanWriteCount);
+                m_info.MyWindowSize = (ushort)m_info.BufferLoop.CanWriteCount;
 
-                    SendACK(data);
+                Send();
+            }
+            else
+            {
+                Send();
 
-                }
-                else
-                {
-                    Console.WriteLine("TCP乱序包到达");
-                }
+                Console.WriteLine("TCP乱序包到达");
             }
         }
     }
 
-
-    sealed class WriteBuffer
+    sealed partial class BufferWindow : BufferAbstract
     {
+
         sealed class Item
         {
             public Item(byte[] buffer, int offset, int count)
@@ -165,16 +250,78 @@ namespace LeiKaiFeng.TCPIP
 
         private readonly object m_lock = new object();
 
-        BufferWindow m_BufferWindow;
+        readonly Queue<Item> m_queue = new Queue<Item>();
 
-        Queue<Item> m_queue = new Queue<Item>();
+
+        int m_offset = 0;
+
+
+        void ReadAdd(int n)
+        {
+            m_readOffset += n;
+
+            m_readCount -= n;
+        }
+
+
+        void WriteAdd(int n)
+        {
+            m_writeOffset += n;
+
+            m_writeCount -= n;
+
+            m_readCount += n;
+        }
+
 
         public int Read(byte[] buffer, int offset, int count)
         {
+            lock (m_lock)
+            {
+                int readOffset = m_readOffset;
 
+                int readCount = m_readCount;
 
-            return m_BufferWindow.Read(buffer, offset, count);
+                m_readOffset += m_offset;
+
+                m_readCount -= m_offset;
+
+                int n = Read(ReadAdd, buffer, offset, count);
+
+                m_offset += n;
+
+                m_readOffset = readOffset;
+
+                m_readCount = readCount;
+
+                return n;
+            }
+
+            
         }
+
+        public void SetAck(int n)
+        {
+            if (n < 0 || n > m_readCount)
+            {
+                throw new ArgumentOutOfRangeException(nameof(n));
+            }
+
+            lock (m_lock)
+            {
+
+                m_offset = 0;
+
+                m_readOffset += n;
+
+                m_readCount -= n;
+
+                m_writeCount += n;
+
+                Write();
+            }
+        }
+
 
 
         void Write()
@@ -188,7 +335,7 @@ namespace LeiKaiFeng.TCPIP
 
 
 
-                int n = m_BufferWindow.Write(item.Buffer, item.Offset, item.Count);
+                int n = Write(WriteAdd, item.Buffer, item.Offset, item.Count);
 
                 if (n == 0)
                 {
@@ -212,8 +359,6 @@ namespace LeiKaiFeng.TCPIP
                         return;
                     }
                 }
-
-
             }
         }
 
@@ -237,12 +382,12 @@ namespace LeiKaiFeng.TCPIP
 
                 return task;
             }
-
         }
     }
 
-    sealed class ReadBuffer
+    sealed class BufferLoop : BufferAbstract
     {
+
         readonly struct Item
         {
             public Item(byte[] buffer, int offset, int count)
@@ -271,28 +416,19 @@ namespace LeiKaiFeng.TCPIP
 
         private readonly object m_lock = new object();
 
-        readonly BufferLoop m_buffer = new BufferLoop();
-
         readonly Queue<Item> m_queue = new Queue<Item>();
-
-        public ushort CanWriteCount => (ushort)m_buffer.CanWriteCount;
-
-        public ReadBuffer()
-        {
-
-        }
 
         public int Write(byte[] buffer, int offset, int count)
         {
             lock (m_lock)
             {
-                int n = m_buffer.Write(buffer, offset, count);
+                int n = Write(WriteAdd, buffer, offset, count);
 
                 if (n != count)
                 {
                     Read();
 
-                    n += m_buffer.Write(buffer, offset + n, count - n);
+                    n += Write(WriteAdd, buffer, offset + n, count - n);
 
                     Read();
                 }
@@ -312,7 +448,7 @@ namespace LeiKaiFeng.TCPIP
             {
                 var item = m_queue.Peek();
 
-                int n = m_buffer.Read(item.Buffer, item.Offset, item.Count);
+                int n = Read(ReadAdd, item.Buffer, item.Offset, item.Count);
 
                 if (n == 0)
                 {
@@ -343,97 +479,7 @@ namespace LeiKaiFeng.TCPIP
                 return task;
             }
         }
-    }
 
-
-    sealed class BufferWindow : BufferAbstract
-    {
-        int m_offset;
-
-
-        public BufferWindow()
-        {
-            m_offset = 0;
-        }
-
-        public int Offset
-        {
-            get
-            {
-                return m_offset;
-            }
-
-            set
-            {
-                if (value >= 0 && value <= m_readCount)
-                {
-                    m_offset = value;
-                }
-                else
-                {
-                    throw new ArgumentOutOfRangeException(nameof(value));
-                }
-            }
-        }
-
-
-        public void SetNowOffset()
-        {
-            m_readOffset += m_offset;
-
-            m_readCount -= m_offset;
-
-            m_writeCount += m_offset;
-        }
-
-
-        void ReadAdd(int n)
-        {
-            m_readOffset += n;
-
-            m_readCount -= n;
-        }
-
-
-        void WriteAdd(int n)
-        {
-            m_writeOffset += n;
-
-            m_writeCount -= n;
-
-            m_readCount += n;
-        }
-
-
-        public int Read(byte[] buffer, int offset, int count)
-        {
-            int readOffset = m_readOffset;
-
-            int readCount = m_readCount;
-
-            m_readOffset += m_offset;
-
-            m_readCount -= m_offset;
-
-            int n = Read(ReadAdd, buffer, offset, count);
-
-            m_offset += n;
-
-            m_readOffset = readOffset;
-
-            m_readCount = readCount;
-           
-            return n;
-        }
-
-        public int Write(byte[] buffer, int offset, int count)
-        {
-            return Write(WriteAdd, buffer, offset, count);
-        }
-    }
-
-    sealed class BufferLoop : BufferAbstract
-    {
         void ReadAdd(int n)
         {
             m_readOffset += n;
@@ -454,16 +500,6 @@ namespace LeiKaiFeng.TCPIP
             m_readCount += n;
         }
 
-
-        public int Read(byte[] buffer, int offset, int count)
-        {
-            return Read(ReadAdd, buffer, offset, count);
-        }
-
-        public int Write(byte[] buffer, int offset, int count)
-        {
-            return Write(WriteAdd, buffer, offset, count);
-        }
 
     }
 
@@ -601,34 +637,7 @@ namespace LeiKaiFeng.TCPIP
 
    
 
-    sealed class TCPStreamInfo
-    {
-        public TCPStreamInfo(Quaternion quaternion, uint acknowledgmentNumber, uint sequenceNumber)
-        {
-
-            ReadBuffer = new ReadBuffer();
-
-            WriteBuffer = new WriteBuffer();
-
-            
-            Quaternion = quaternion;
-            AcknowledgmentNumber = acknowledgmentNumber;
-            SequenceNumber = sequenceNumber;
-        }
-
-        internal ReadBuffer ReadBuffer { get; }
-
-        internal WriteBuffer WriteBuffer { get; }
-
-        internal Quaternion Quaternion { get; }
-
-        internal uint AcknowledgmentNumber { get; set; }
-
-        internal uint SequenceNumber { get; set; }
-
-        
-    }
-
+    
 
     sealed class HandshakePhase
     {
@@ -710,9 +719,9 @@ namespace LeiKaiFeng.TCPIP
             return layer;
         }
 
-        static void Init(TCPLayerInfo info, UPPacket upPacket)
+        void Init(UPPacket upPacket)
         {
-            if (info.HPDic.ContainsKey(upPacket.Quaternion))
+            if (m_info.HPDic.ContainsKey(upPacket.Quaternion))
             {
                 Console.WriteLine("已经存在了一个进行中的握手");
             }
@@ -727,17 +736,17 @@ namespace LeiKaiFeng.TCPIP
                     ackSeq,
                     upPacket.Quaternion);
 
-                info.HPDic.Add(upPacket.Quaternion, handshakePhase);
+                m_info.HPDic.Add(upPacket.Quaternion, handshakePhase);
 
-                info.DownPacketColl.Add(handshakePhase.DownPacket);
+                m_info.DownPacketColl.Add(handshakePhase.DownPacket);
 
                 Console.WriteLine("一个握手开始");
             }
         }
 
-        static void Add(TCPLayerInfo info, UPPacket packet, HandshakePhase handshake)
+        void Add(UPPacket packet, HandshakePhase handshake)
         {
-            if (info.Dic.ContainsKey(packet.Quaternion))
+            if (m_info.Dic.ContainsKey(packet.Quaternion))
             {
                 Console.WriteLine("握手成功一个，但已经存在了一个TCP");
             }
@@ -745,31 +754,31 @@ namespace LeiKaiFeng.TCPIP
             {
                 Console.WriteLine("握手成功一个");
 
-                TCPStream stream = new TCPStream(new TCPStreamInfo(packet.Quaternion, handshake.AcknowledgmentNumber, handshake.SequenceNumber));
+                TCPStream stream = new TCPStream(new TCPStreamInfo(this, packet.Quaternion, ushort.MaxValue, packet.TCPData.WindowSize, handshake.AcknowledgmentNumber, handshake.SequenceNumber));
 
-                info.Dic.Add(packet.Quaternion, stream);
+                m_info.Dic.Add(packet.Quaternion, stream);
 
-                Task.Run(() => info.IntoConnect(stream));
+                Task.Run(() => m_info.IntoConnect(stream));
             }
         }
 
-        static void Add(TCPLayer tCPLayer, TCPLayerInfo info, UPPacket packet)
+        void Add(UPPacket packet)
         {
-            if (info.HPDic.ContainsKey(packet.Quaternion))
+            if (m_info.HPDic.ContainsKey(packet.Quaternion))
             {
-                HandshakePhase handshake = info.HPDic[packet.Quaternion];
+                HandshakePhase handshake = m_info.HPDic[packet.Quaternion];
 
-                info.HPDic.Remove(packet.Quaternion);
+                m_info.HPDic.Remove(packet.Quaternion);
 
                 handshake.SequenceNumber = packet.TCPData.AcknowledgmentNumber;
 
                 handshake.AcknowledgmentNumber = packet.TCPData.SequenceNumber;
 
-                Add(info, packet, handshake);
+                Add(packet, handshake);
             }
-            else if (info.Dic.ContainsKey(packet.Quaternion))
+            else if (m_info.Dic.ContainsKey(packet.Quaternion))
             {
-                TCPStream stream = info.Dic[packet.Quaternion];
+                TCPStream stream = m_info.Dic[packet.Quaternion];
 
                 stream.WritePacket(packet);
             }
@@ -800,7 +809,7 @@ namespace LeiKaiFeng.TCPIP
 
             if (flag == TCPFlag.SYN)
             {
-                Init(m_info, packet);
+                Init(packet);
             }
             else if (Meth.HasFlag(flag, TCPFlag.RST | TCPFlag.FIN))
             {
@@ -808,7 +817,7 @@ namespace LeiKaiFeng.TCPIP
             }
             else if (Meth.HasFlag(flag, TCPFlag.ACK))
             {
-                Add(this, m_info, packet);
+                Add(packet);
             }
             else
             {

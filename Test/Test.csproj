@@ -6,6 +6,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="DNS" Version="6.1.0" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\LeiKaiFeng.TCPIP\LeiKaiFeng.TCPIP.csproj" />
   </ItemGroup>
 
