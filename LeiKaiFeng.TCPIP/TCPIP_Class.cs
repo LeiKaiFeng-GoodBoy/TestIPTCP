@@ -54,7 +54,11 @@ namespace LeiKaiFeng.TCPIP
 
         public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
         {
-            return base.WriteAsync(buffer, offset, count, cancellationToken);
+            Task task = m_info.BufferWindow.Write(buffer, offset, count);
+
+            Send();
+
+            return task;
         }
 
         public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
@@ -79,16 +83,22 @@ namespace LeiKaiFeng.TCPIP
             BufferWindow = new BufferWindow();
 
             Quaternion = quaternion;
+            
             MyWindowSize = myWindowSize;
+            
             DesWindowSize = desWindowSize;
+            
             AcknowledgmentNumber = acknowledgmentNumber;
+            
             SequenceNumber = sequenceNumber;
 
-            OlderAcknowledgmentNumber = OlderAcknowledgmentNumber;
+            OlderSequenceNumber = sequenceNumber;
 
-            AckCount = 0;
+            NowSequenceNumber = sequenceNumber;
 
-            UsedAckCount = 0;
+            SeqCount = 0;
+
+            UsedSeqCount = 0;
         }
 
         internal TCPLayer TCPLayer { get; }
@@ -105,22 +115,21 @@ namespace LeiKaiFeng.TCPIP
 
         internal uint AcknowledgmentNumber { get; set; }
 
-        internal uint OlderAcknowledgmentNumber { get; set; }
+        internal uint OlderSequenceNumber { get; set; }
 
         internal uint SequenceNumber { get; set; }
 
-        internal ushort AckCount { get; set; }
+        internal uint NowSequenceNumber { get; set; }
 
-        internal ushort UsedAckCount { get; set; }
+        internal ushort SeqCount { get; set; }
 
-
-
+        internal ushort UsedSeqCount { get; set; }
     }
 
 
     public sealed partial class TCPStream : Stream
     {
-        
+        private readonly object m_lock = new object();
 
         readonly TCPStreamInfo m_info;
 
@@ -132,18 +141,30 @@ namespace LeiKaiFeng.TCPIP
             m_info = info;
         }
 
+        void GetNow()
+        {
+            const ulong N = (ulong)uint.MaxValue + 1;
+
+            ulong n1 = N + m_info.NowSequenceNumber;
+
+            ulong n2 = m_info.SequenceNumber;
+
+            
+        }
+
         uint GetAck()
         {
-            const ulong N = 0x01 << 32;
+            const ulong N = (ulong)uint.MaxValue + 1;
 
-            ulong n1 = N + m_info.AcknowledgmentNumber;
+            ulong n1 = N + m_info.SequenceNumber;
 
-            ulong n2 = m_info.OlderAcknowledgmentNumber;
+            ulong n2 = m_info.OlderSequenceNumber;
+
 
             uint n = (uint)(n1 - n2);
 
 
-            m_info.OlderAcknowledgmentNumber = m_info.AcknowledgmentNumber;
+            m_info.OlderSequenceNumber = m_info.SequenceNumber;
 
             return n;
         }
@@ -152,39 +173,30 @@ namespace LeiKaiFeng.TCPIP
         void DownPacket(DownPacket downPacket)
         {
 
-            if (m_info.UsedAckCount == m_info.AckCount)
+            lock (m_lock)
             {
+                if (m_info.UsedSeqCount != m_info.SeqCount)
+                {
+                    m_info.UsedSeqCount = m_info.SeqCount;
+
+                    m_info.BufferWindow.SetAck((int)GetAck());
+                }
+
+
                 int n = downPacket.Write(m_info.BufferWindow.Read);
-
-                m_info.SequenceNumber += (uint)n;
-
+                
                 downPacket.WriteTCP(
                     m_info.Quaternion,
                     TCPFlag.ACK,
                     m_info.MyWindowSize,
-                    m_info.SequenceNumber,
-                    m_info.AcknowledgmentNumber,
-                    default);
-            }
-            else
-            {
-                m_info.UsedAckCount = m_info.AckCount;
-
-                m_info.BufferWindow.SetAck((int)GetAck());
-
-                int n = downPacket.Write(m_info.BufferWindow.Read);
-
-                m_info.SequenceNumber += (uint)n;
-
-                downPacket.WriteTCP(
-                    m_info.Quaternion,
-                    TCPFlag.ACK,
-                    m_info.MyWindowSize,
-                    m_info.SequenceNumber,
+                    m_info.NowSequenceNumber,
                     m_info.AcknowledgmentNumber,
                     default);
 
+                m_info.NowSequenceNumber += (uint)n;
             }
+
+
         }
 
         void Send()
@@ -195,29 +207,34 @@ namespace LeiKaiFeng.TCPIP
         internal void WritePacket(UPPacket packet)
         {
 
-            m_info.AckCount++;
-
-            m_info.DesWindowSize = packet.TCPData.WindowSize;
-
-            m_info.SequenceNumber = packet.TCPData.AcknowledgmentNumber;
-
-            if (packet.TCPData.SequenceNumber == m_info.AcknowledgmentNumber)
+            lock (m_lock)
             {
+                m_info.SeqCount++;
 
-                int n = m_info.BufferLoop.Write(packet.Array, packet.Offset, packet.Count);
+                m_info.DesWindowSize = packet.TCPData.WindowSize;
 
-                m_info.AcknowledgmentNumber += (uint)n;
+                m_info.SequenceNumber = packet.TCPData.AcknowledgmentNumber;
 
-                m_info.MyWindowSize = (ushort)m_info.BufferLoop.CanWriteCount;
+                if (packet.TCPData.SequenceNumber == m_info.AcknowledgmentNumber)
+                {
 
-                Send();
+                    int n = m_info.BufferLoop.Write(packet.Array, packet.Offset, packet.Count);
+
+                    m_info.AcknowledgmentNumber += (uint)n;
+
+                    m_info.MyWindowSize = (ushort)m_info.BufferLoop.CanWriteCount;
+
+                    Send();
+                }
+                else
+                {
+                    Send();
+
+                    Console.WriteLine("TCP乱序包到达");
+                }
             }
-            else
-            {
-                Send();
 
-                Console.WriteLine("TCP乱序包到达");
-            }
+            
         }
     }
 
@@ -302,13 +319,17 @@ namespace LeiKaiFeng.TCPIP
 
         public void SetAck(int n)
         {
-            if (n < 0 || n > m_readCount)
-            {
-                throw new ArgumentOutOfRangeException(nameof(n));
-            }
+            
+            
 
             lock (m_lock)
             {
+                if (n < 0 || n > m_readCount)
+                {
+                    Console.WriteLine($"                {n} {m_readCount}");
+
+                    throw new ArgumentOutOfRangeException(nameof(n));
+                }
 
                 m_offset = 0;
 
@@ -712,14 +733,14 @@ namespace LeiKaiFeng.TCPIP
         }
 
 
-        public static TCPLayer Init(TCPLayerInfo info, Action<Exception> logAction)
+        public static TCPLayer Init(TCPLayerInfo info)
         {
             TCPLayer layer = new TCPLayer(info);
 
             return layer;
         }
 
-        void Init(UPPacket upPacket)
+        void InitHandshake(UPPacket upPacket)
         {
             if (m_info.HPDic.ContainsKey(upPacket.Quaternion))
             {
@@ -738,13 +759,13 @@ namespace LeiKaiFeng.TCPIP
 
                 m_info.HPDic.Add(upPacket.Quaternion, handshakePhase);
 
-                m_info.DownPacketColl.Add(handshakePhase.DownPacket);
+                AddDownPacket(handshakePhase.DownPacket);
 
                 Console.WriteLine("一个握手开始");
             }
         }
 
-        void Add(UPPacket packet, HandshakePhase handshake)
+        void OKHandshanke(UPPacket packet, HandshakePhase handshake)
         {
             if (m_info.Dic.ContainsKey(packet.Quaternion))
             {
@@ -762,7 +783,7 @@ namespace LeiKaiFeng.TCPIP
             }
         }
 
-        void Add(UPPacket packet)
+        void FACK(UPPacket packet)
         {
             if (m_info.HPDic.ContainsKey(packet.Quaternion))
             {
@@ -770,11 +791,23 @@ namespace LeiKaiFeng.TCPIP
 
                 m_info.HPDic.Remove(packet.Quaternion);
 
-                handshake.SequenceNumber = packet.TCPData.AcknowledgmentNumber;
+                if (handshake.SequenceNumber + 1 == packet.TCPData.AcknowledgmentNumber &&
+                    handshake.AcknowledgmentNumber == packet.TCPData.SequenceNumber)
+                {
 
-                handshake.AcknowledgmentNumber = packet.TCPData.SequenceNumber;
+                    handshake.SequenceNumber = packet.TCPData.AcknowledgmentNumber;
 
-                Add(packet, handshake);
+                    handshake.AcknowledgmentNumber = packet.TCPData.SequenceNumber;
+
+                }
+                else
+                {
+                    Console.WriteLine("存在一个序号不匹配的握手");
+
+                    return;
+                }
+
+                OKHandshanke(packet, handshake);
             }
             else if (m_info.Dic.ContainsKey(packet.Quaternion))
             {
@@ -791,7 +824,7 @@ namespace LeiKaiFeng.TCPIP
 
         internal void AddDownPacket(Action<DownPacket> action)
         {
-            m_info.DownPacketColl.TryAdd(action);
+            m_info.DownPacketColl.Add(action);
         }
 
         public void DownPacket(DownPacket downPacket)
@@ -809,7 +842,7 @@ namespace LeiKaiFeng.TCPIP
 
             if (flag == TCPFlag.SYN)
             {
-                Init(packet);
+                InitHandshake(packet);
             }
             else if (Meth.HasFlag(flag, TCPFlag.RST | TCPFlag.FIN))
             {
@@ -817,7 +850,7 @@ namespace LeiKaiFeng.TCPIP
             }
             else if (Meth.HasFlag(flag, TCPFlag.ACK))
             {
-                Add(packet);
+                FACK(packet);
             }
             else
             {
@@ -827,6 +860,13 @@ namespace LeiKaiFeng.TCPIP
 
         }
     }
+
+
+
+
+
+
+
 
 
     [StructLayout(LayoutKind.Auto)]
@@ -1105,9 +1145,14 @@ namespace LeiKaiFeng.TCPIP
 
     }
 
+
+
+
+
+
     public sealed class IPLayerInfo
     {
-        public IPLayerInfo(Func<byte[], int, int, int> read, Action<byte[], int, int> write, Action<UPPacket> uPPacket, Action<DownPacket> downPacket)
+        public IPLayerInfo(Func<byte[], int, int, int> read, Action<byte[], int, int> write, Action<UPPacket> upPacket, Action<DownPacket> downPacket)
         {
             int mtuSize = 65535;
 
@@ -1120,7 +1165,7 @@ namespace LeiKaiFeng.TCPIP
 
             Read = read ?? throw new ArgumentNullException(nameof(read));
             Write = write ?? throw new ArgumentNullException(nameof(write));
-            UPPacket = uPPacket ?? throw new ArgumentNullException(nameof(uPPacket));
+            UPPacket = upPacket ?? throw new ArgumentNullException(nameof(upPacket));
             DownPacket = downPacket ?? throw new ArgumentNullException(nameof(downPacket));
         }
 
@@ -1164,9 +1209,10 @@ namespace LeiKaiFeng.TCPIP
 
         void Write()
         {
-            DownPacket downPacket = new DownPacket(ushort.MaxValue);
+            DownPacket downPacket = new DownPacket(1024);
             while (true)
             {
+                Console.WriteLine("Write");
                 downPacket.InitOffsetCount();
 
                 m_info.DownPacket(downPacket);
@@ -1192,242 +1238,6 @@ namespace LeiKaiFeng.TCPIP
                     Console.WriteLine("已丢弃ip包");
                 }
             }
-        }
-    }
-
-
-
-    [StructLayout(LayoutKind.Auto)]
-    public readonly ref struct UDPReadData
-    {
-        public UDPReadData(byte[] buffer, IPv4Address sourceAddress, ushort sourcePort, IPv4Address desAddress, ushort desPort, Span<byte> span, ushort length)
-        {
-            Buffer = buffer;
-            SourceAddress = sourceAddress;
-            SourcePort = sourcePort;
-            DesAddress = desAddress;
-            DesPort = desPort;
-            Span = span;
-
-            Length = length;
-        }
-
-        public byte[] Buffer { get; }
-
-        public IPv4Address SourceAddress { get; }
-
-
-        public ushort SourcePort { get; }
-
-
-        public IPv4Address DesAddress { get; }
-
-        public ushort DesPort { get; }
-
-        public Span<byte> Span { get; }
-
-        public ushort Length { get; }
-    }
-
-    [StructLayout(LayoutKind.Auto)]
-    public readonly ref struct IPReadData
-    {
-        public IPReadData(byte[] buffer, IPv4Address source, IPv4Address des, Protocol pro, Span<byte> span)
-        {
-            Buffer = buffer;
-            Source = source;
-            Des = des;
-            Pro = pro;
-            Span = span;
-        }
-
-        public byte[] Buffer { get; }
-
-        public IPv4Address Source { get; }
-
-        public IPv4Address Des { get; }
-
-        public Protocol Pro { get; }
-
-        public Span<byte> Span { get; }
-    }
-
-    [StructLayout(LayoutKind.Auto)]
-    public readonly ref struct UDPWriteData
-    {
-        public UDPWriteData(IPv4Address source, ushort sourcePort, IPv4Address des, ushort desPort, ushort length)
-        {
-            Source = source;
-            SourcePort = sourcePort;
-            Des = des;
-            DesPort = desPort;
-            Length = length;
-        }
-
-        public IPv4Address Source { get; }
-
-        public ushort SourcePort { get; }
-
-
-        public IPv4Address Des { get; }
-
-
-        public ushort DesPort { get; }
-
-
-        public ushort Length { get; }
-    }
-
-    [StructLayout(LayoutKind.Auto)]
-    public readonly ref struct IPWriteData
-    {
-        public IPWriteData(IPv4Address source, IPv4Address des, ushort length, Protocol pro)
-        {
-            Source = source;
-            Des = des;
-            Length = length;
-            Pro = pro;
-        }
-
-        public IPv4Address Source { get; }
-
-        public IPv4Address Des { get; }
-
-        public ushort Length { get; }
-
-        public Protocol Pro { get; }
-    }
-
-
-    public sealed class IPProtocol
-    {
-        readonly IIPUpProtocol m_upProtocol;
-
-        public IPProtocol(IIPUpProtocol upProtocol)
-        {
-            m_upProtocol = upProtocol;
-        }
-
-        public ushort ReadPacket(Span<byte> buffer)
-        {
-            var data = m_upProtocol.WriteIPPacket(IPHeader.SubHeaderSizeSlice(buffer));
-
-            ref IPHeader header = ref Meth.AsStruct<IPHeader>(buffer);
-
-            return IPHeader.Set(ref header, data);
-        }
-
-        public void WritePacket(byte[] buffer)
-        {
-            Span<byte> span = buffer;
-
-            ref IPHeader header = ref Meth.AsStruct<IPHeader>(span);
-
-            int headerLegnth = header.HeadLength;
-
-            if (headerLegnth != 5)
-            {
-
-                Console.WriteLine($"已丢弃ip包");
-
-                return;
-            }
-
-            m_upProtocol.ReadIPPacket(new IPReadData(
-                   buffer,
-                   header.SourceAddress,
-                   header.DesAddress,
-                   header.Protocol,
-                   IPHeader.SubHeaderSizeSlice(span)));
-        }
-
-
-        static void Print(IPHeader header)
-        {
-
-            StringBuilder sb = new StringBuilder();
-
-            sb.AppendLine($"Version {header.Version}")
-              .AppendLine($"HeaderLength {header.HeadLength}")
-              .AppendLine($"AllLength {header.AllLength}")
-              .AppendLine($"TTL {header.TTL}")
-              .AppendLine($"Protocol {header.Protocol}");
-
-
-
-            Console.WriteLine(sb.ToString());
-
-
-        }
-    }
-
-    public sealed class UDPProtocol : IIPUpProtocol
-    {
-        public void ReadIPPacket(IPReadData readData)
-        {
-            if (readData.Pro != Protocol.UDP)
-            {
-                Console.WriteLine("已丢弃udp");
-
-                return;
-            }
-
-            ref UDPHeader header = ref Meth.AsStruct<UDPHeader>(readData.Span);
-
-            ReadUDPPacket(
-                new UDPReadData(
-                    readData.Buffer,
-                    readData.Source,
-                    header.SourcePort,
-                    readData.Des,
-                    header.DesPort,
-                    UDPHeader.SubHeaderSizeSlice(readData.Span),
-                    header.GetSubHeaderSizeLength()));        
-        }
-
-        void ReadUDPPacket(UDPReadData readData)
-        {
-
-            int offset;
-
-            Meth.GetOffsetCount(
-                readData.Buffer,
-                readData.Span,
-                out offset);
-
-
-            Console.WriteLine($"{readData.SourceAddress}:{readData.SourcePort} {readData.DesAddress}:{readData.DesPort} {Encoding.UTF8.GetString(readData.Buffer, offset, readData.Length)}");
-
-            Console.WriteLine(Encoding.UTF8.GetString(readData.Buffer, offset, readData.Length));
-
-           
-        }
-
-        public IPWriteData WriteIPPacket(Span<byte> buffer)
-        {
-
-            var data = WriteUDPPacket(UDPHeader.SubHeaderSizeSlice(buffer));
-
-
-            ref UDPHeader header = ref Meth.AsStruct<UDPHeader>(buffer);
-
-
-            ushort length = UDPHeader.Set(ref header, data, buffer);
-
-
-            return new IPWriteData(data.Source, data.Des, length, Protocol.UDP);
-        }     
-    
-
-        UDPWriteData WriteUDPPacket(Span<byte> buffer)
-        {
-           
-            return new UDPWriteData(
-                new IPv4Address(192, 168, 1, 106),
-                5050,
-                new IPv4Address(192, 168, 2,2),
-                5050,
-                (ushort)buffer.Length);
         }
     }
 }

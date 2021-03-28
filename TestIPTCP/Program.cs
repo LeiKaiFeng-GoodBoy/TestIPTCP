@@ -16,22 +16,6 @@ namespace TestIPTCP
     class Program
     {
 
-        static void Tcp()
-        {
-            Socket listen = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-
-            listen.Bind(new IPEndPoint(IPAddress.Loopback, 80));
-
-            listen.Listen(0);
-
-            listen.ReceiveBufferSize = 4096;
-            Socket connect = listen.Accept();
-
-
-            Console.ReadLine();
-
-
-        }
         static int WriteDes(byte[] buffer)
         {
             Span<byte> span = stackalloc byte[] {
@@ -125,88 +109,46 @@ namespace TestIPTCP
             };
         }
 
-        static void UdpRead(Socket socket)
+        static void Udp()
         {
+            Socket socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+
+            socket.Bind(new IPEndPoint(IPAddress.Parse("192.168.1.106"), 5050));
+
+            socket.Connect(new IPEndPoint(IPAddress.Parse("192.168.1.104"), 5050));
+
             //\\.\pipe\MMYY
             var wir = WiresharkSender.Create("MMYY");
 
             TCPLayerInfo layerInfo = new TCPLayerInfo((tcp) =>
             {
-                Console.WriteLine(tcp.Quaternion);
+                Socket connect = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
 
-                byte[] buffer = new byte[2048];
+                connect.Connect(new IPEndPoint(IPAddress.Loopback, 80));
 
-                int n = tcp.Read(buffer);
+                NetworkStream networkStream = new NetworkStream(connect);
 
-                Console.WriteLine(Encoding.UTF8.GetString(buffer, 0, n));
+
+                networkStream.CopyToAsync(tcp);
+
+                tcp.CopyToAsync(networkStream);
+
 
             });
 
-            var tcp = TCPLayer.Init(layerInfo, (e) => Console.WriteLine(e));
+            var tcp = TCPLayer.Init(layerInfo);
 
 
             var la = IPLayer.Init(new IPLayerInfo(
                 ReadUDPAndWir(socket, wir),
                 WriteUDPAndWir(socket, wir),
                 tcp.UPPacket,
-                tcp.DownPacket));
+                tcp.DownPacket), (e) => Console.WriteLine(e));
 
 
-            
+
             Console.Read();
-
         }
-
-
-        static void UdpWrite(Socket socket)
-        {
-            byte[] buffer = new byte[75536];
-
-            var stream = new IPProtocol(new UDPProtocol());
-            while (true)
-            {
-
-                int n = socket.Receive(buffer, SocketFlags.None);
-
-                stream.WritePacket(buffer);
-
-                Thread.Sleep(100);
-
-            }
-        }
-
-        static void Udp()
-        {
-            Socket socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
-
-
-
-            socket.Bind(new IPEndPoint(IPAddress.Parse("192.168.1.106"), 5050));
-
-            socket.Connect(new IPEndPoint(IPAddress.Parse("192.168.1.104"), 5050));
-
-            UdpRead(socket);
-        }
-
-        //static void Raw()
-        //{
-        //    Socket socket = new Socket(AddressFamily.InterNetwork, SocketType.Raw, ProtocolType.IP);
-
-
-        //    socket.Bind(new IPEndPoint(IPAddress.Parse("192.168.1.106"), 5050));
-
-        //    IPLayer layer = IPLayer.Init(new IPLayerInfo(
-        //        (buffer, offset, count) => socket.Receive(buffer, offset, count, SocketFlags.None),
-        //        (buffer, offset, count) => socket.Send(buffer, offset, count, SocketFlags.None)));
-        //    while (true)
-        //    {
-
-        //        var up = layer.TakeUPPacket();
-
-        //        Console.WriteLine($"{up.IPData.SourceAddress} {up.IPData.DesAddress} {up.IPData.Protocol}");
-
-        //    }
-        //}
 
         static void Main()
         {
