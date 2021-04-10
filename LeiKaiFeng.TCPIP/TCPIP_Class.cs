@@ -54,16 +54,12 @@ namespace LeiKaiFeng.TCPIP
 
         public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
         {
-            Task task = m_info.BufferWindow.Write(buffer, offset, count);
-
-            Send();
-
-            return task;
+            return Task.CompletedTask;
         }
 
         public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
         {
-            return m_info.BufferLoop.Read(buffer, offset, count);
+            return m_info.ReadBuffer.Read(buffer, offset, count);
         }
 
         protected override void Dispose(bool disposing)
@@ -78,9 +74,7 @@ namespace LeiKaiFeng.TCPIP
         {
             TCPLayer = tcpLauer;
 
-            BufferLoop = new BufferLoop();
-
-            BufferWindow = new BufferWindow();
+            ReadBuffer = new ReadBuffer(sequenceNumber);
 
             Quaternion = quaternion;
             
@@ -99,13 +93,13 @@ namespace LeiKaiFeng.TCPIP
             SeqCount = 0;
 
             UsedSeqCount = 0;
+
+            IsStartAck = false;
         }
 
         internal TCPLayer TCPLayer { get; }
 
-        internal BufferLoop BufferLoop { get; }
-
-        internal BufferWindow BufferWindow { get; }
+        internal ReadBuffer ReadBuffer { get; }
 
         internal Quaternion Quaternion { get; }
 
@@ -124,6 +118,8 @@ namespace LeiKaiFeng.TCPIP
         internal ushort SeqCount { get; set; }
 
         internal ushort UsedSeqCount { get; set; }
+
+        internal bool IsStartAck { get; set; }
     }
 
 
@@ -141,96 +137,50 @@ namespace LeiKaiFeng.TCPIP
             m_info = info;
         }
 
-        void GetNow()
+        
+        void ACK()
         {
-            const ulong N = (ulong)uint.MaxValue + 1;
+            DownPacket downPacket = new DownPacket(600);
 
-            ulong n1 = N + m_info.NowSequenceNumber;
-
-            ulong n2 = m_info.SequenceNumber;
-
-            
-        }
-
-        uint GetAck()
-        {
-            const ulong N = (ulong)uint.MaxValue + 1;
-
-            ulong n1 = N + m_info.SequenceNumber;
-
-            ulong n2 = m_info.OlderSequenceNumber;
+            downPacket.WriteTCP(
+                m_info.Quaternion,
+                 TCPFlag.ACK,
+                 m_info.MyWindowSize,
+                 m_info.AcknowledgmentNumber,
+                 m_info.SequenceNumber,
+                 default);
 
 
-            uint n = (uint)(n1 - n2);
-
-
-            m_info.OlderSequenceNumber = m_info.SequenceNumber;
-
-            return n;
-        }
-
-
-        void DownPacket(DownPacket downPacket)
-        {
-
-            lock (m_lock)
-            {
-                if (m_info.UsedSeqCount != m_info.SeqCount)
-                {
-                    m_info.UsedSeqCount = m_info.SeqCount;
-
-                    m_info.BufferWindow.SetAck((int)GetAck());
-                }
-
-
-                int n = downPacket.Write(m_info.BufferWindow.Read);
-                
-                downPacket.WriteTCP(
-                    m_info.Quaternion,
-                    TCPFlag.ACK,
-                    m_info.MyWindowSize,
-                    m_info.NowSequenceNumber,
-                    m_info.AcknowledgmentNumber,
-                    default);
-
-                m_info.NowSequenceNumber += (uint)n;
-            }
+            m_info.TCPLayer.Write(downPacket);
 
 
         }
 
-        void Send()
-        {
-            m_info.TCPLayer.AddDownPacket(DownPacket);
-        }
 
         internal void WritePacket(UPPacket packet)
         {
 
             lock (m_lock)
             {
-                m_info.SeqCount++;
 
-                m_info.DesWindowSize = packet.TCPData.WindowSize;
+                uint seq = packet.TCPData.SequenceNumber;
 
-                m_info.SequenceNumber = packet.TCPData.AcknowledgmentNumber;
+                bool b = m_info.ReadBuffer.Write(ref seq, out var windowSize, packet.Array, packet.Offset, packet.Count);
 
-                if (packet.TCPData.SequenceNumber == m_info.AcknowledgmentNumber)
+                m_info.SequenceNumber = seq;
+
+                m_info.MyWindowSize = windowSize;
+
+                if (b)
                 {
-
-                    int n = m_info.BufferLoop.Write(packet.Array, packet.Offset, packet.Count);
-
-                    m_info.AcknowledgmentNumber += (uint)n;
-
-                    m_info.MyWindowSize = (ushort)m_info.BufferLoop.CanWriteCount;
-
-                    Send();
+                    ACK();
                 }
                 else
                 {
-                    Send();
-
-                    Console.WriteLine("TCP乱序包到达");
+                    ACK();
+                    ACK();
+                    ACK();
+                    ACK();
                 }
             }
 
@@ -238,192 +188,277 @@ namespace LeiKaiFeng.TCPIP
         }
     }
 
-    sealed partial class BufferWindow : BufferAbstract
+
+    static class BufferMethod
     {
-
-        sealed class Item
+        interface ICopy
         {
-            public Item(byte[] buffer, int offset, int count)
-            {
-                TaskCompletionSource = new TaskCompletionSource<object>(TaskCreationOptions.RunContinuationsAsynchronously);
+            int Copy(Span<byte> source, Span<byte> des);
+        }
 
-                Buffer = buffer;
-                Offset = offset;
-                Count = count;
+
+        public struct ArrayItem
+        {
+
+            public readonly byte[] Source;
+
+            public int SourceOffset;
+
+            public int SourceCount;
+
+            public readonly byte[] Des;
+
+            public int DesOffset;
+
+            public int DesCount;
+
+            public ArrayItem(byte[] source, int sourceOffset, int sourceCount, byte[] des, int desOffset, int desCount)
+            {
+                Source = source;
+                SourceOffset = sourceOffset;
+                SourceCount = sourceCount;
+                Des = des;
+                DesOffset = desOffset;
+                DesCount = desCount;
+            }
+        }
+
+        struct WriteCopy : ICopy
+        {
+
+            public int Copy(Span<byte> source, Span<byte> des)
+            {
+                return CopyTo(des, source);
+            }
+        }
+
+        struct ReadCopy : ICopy
+        {
+            public int Copy(Span<byte> source, Span<byte> des)
+            {
+                return CopyTo(source, des);
+            }
+        }
+
+        static int CopyTo(ReadOnlySpan<byte> source, Span<byte> des)
+        {
+
+            int n;
+            if (source.Length > des.Length)
+            {
+                n = des.Length;
+            }
+            else
+            {
+                n = source.Length;
             }
 
 
+            source.Slice(0, n).CopyTo(des);
 
-            public TaskCompletionSource<object> TaskCompletionSource { get; }
-
-            public Task Task => TaskCompletionSource.Task;
-
-            public byte[] Buffer { get; }
-
-            public int Offset { get; set; }
-
-            public int Count { get; set; }
+            return n;
         }
 
-        private readonly object m_lock = new object();
 
-        readonly Queue<Item> m_queue = new Queue<Item>();
-
-
-        int m_offset = 0;
-
-
-        void ReadAdd(int n)
+        static void Add(ref ArrayItem item, int n)
         {
-            m_readOffset += n;
+            item.SourceOffset += n;
 
-            m_readCount -= n;
+            item.SourceCount -= n;
+
+            item.DesOffset += n;
+
+            item.DesCount -= n;
         }
 
-
-        void WriteAdd(int n)
+        static int Copy_Copy<T>(ref ArrayItem item, T copy) where T : ICopy
         {
-            m_writeOffset += n;
+            int n = copy.Copy(
+                item.Source.AsSpan(item.SourceOffset, item.SourceCount),
+                item.Des.AsSpan(item.DesOffset, item.DesCount));
 
-            m_writeCount -= n;
+            Add(ref item, n);
 
-            m_readCount += n;
+            return n;
         }
 
+        static int Copy<T>(ref ArrayItem item, T copy) where T : ICopy
+        {
+            int allCount = item.SourceOffset + item.SourceCount;
+
+            if (allCount < item.Source.Length)
+            {
+                return Copy_Copy(ref item, copy);
+            }
+            else
+            {
+                int n = copy.Copy(
+                    item.Source.AsSpan(item.SourceOffset, item.Source.Length - item.SourceOffset),
+                    item.Des.AsSpan(item.DesOffset, item.DesCount));
+
+                Add(ref item, n);
+
+                if (item.SourceOffset == item.Source.Length)
+                {
+                    item.SourceOffset = 0;
+
+                    return n + Copy_Copy(ref item, copy);
+                }
+                else
+                {
+                    return n;
+                }
+            }
+        }
+
+
+        public static int Read(ref ArrayItem item)
+        {
+            return Copy(ref item, new ReadCopy());
+        }
+
+        public static int Write(ref ArrayItem item)
+        {
+            return Copy(ref item, new WriteCopy());
+        }
+    }
+
+
+    struct BufferLoop
+    {
+        readonly byte[] _buffer;
+
+        int _readOffset;
+
+        int _readCount;
+
+        int _writeOffset;
+
+        int _writeCount;
+
+        public int CanReadCount => _readCount;
+
+        public int CanWriteCount => _writeCount;
+
+        public BufferLoop(object obj)
+        {
+            _buffer = new byte[ushort.MaxValue];
+
+            _readCount = 0;
+
+            _readOffset = 0;
+
+            _writeCount = _buffer.Length;
+
+            _writeOffset = 0;
+        }
+
+
+        public int Write(byte[] buffer, int offset, int count)
+        {
+            new ArraySegment<byte>(buffer, offset, count);
+
+
+
+            var item = new BufferMethod.ArrayItem(
+                _buffer, _writeOffset, _writeCount,
+                buffer, offset, count);
+
+            int n = BufferMethod.Write(ref item);
+
+            _writeOffset = item.SourceOffset;
+
+            _writeCount = item.SourceCount;
+
+            _readCount += n;
+
+            return n;
+        }
 
         public int Read(byte[] buffer, int offset, int count)
         {
-            lock (m_lock)
+            new ArraySegment<byte>(buffer, offset, count);
+
+            var item = new BufferMethod.ArrayItem(
+                _buffer, _readOffset, _readCount,
+                buffer, offset, count);
+
+
+            int n = BufferMethod.Read(ref item);
+
+
+            _readOffset = item.SourceOffset;
+
+            _readCount = item.SourceCount;
+
+            _writeCount += n;
+
+
+
+            return n;
+        }
+    }
+
+
+
+
+
+
+    static class QueueExtensions
+    {
+        public static bool TryPeek<T>(this Queue<T> queue, out T item)
+        {
+            if (queue.Count == 0)
             {
-                int readOffset = m_readOffset;
+                item = default;
 
-                int readCount = m_readCount;
+                return false;
+            }
+            else
+            {
+                item = queue.Peek();
 
-                m_readOffset += m_offset;
-
-                m_readCount -= m_offset;
-
-                int n = Read(ReadAdd, buffer, offset, count);
-
-                m_offset += n;
-
-                m_readOffset = readOffset;
-
-                m_readCount = readCount;
-
-                return n;
+                return true;
             }
 
-            
         }
 
-        public void SetAck(int n)
+        public static bool TryDequeue<T>(this Queue<T> queue, out T item)
         {
-            
-            
-
-            lock (m_lock)
+            if (queue.Count == 0)
             {
-                if (n < 0 || n > m_readCount)
-                {
-                    Console.WriteLine($"                {n} {m_readCount}");
+                item = default;
 
-                    throw new ArgumentOutOfRangeException(nameof(n));
-                }
-
-                m_offset = 0;
-
-                m_readOffset += n;
-
-                m_readCount -= n;
-
-                m_writeCount += n;
-
-                Write();
+                return false;
             }
-        }
-
-
-
-        void Write()
-        {
-            //这里Count不能为0
-
-            while (m_queue.Count != 0)
+            else
             {
+                item = queue.Dequeue();
 
-                var item = m_queue.Peek();
-
-
-
-                int n = Write(WriteAdd, item.Buffer, item.Offset, item.Count);
-
-                if (n == 0)
-                {
-                    return;
-                }
-                else
-                {
-                    item.Offset += n;
-
-                    item.Count -= n;
-
-                    if (item.Count == 0)
-                    {
-
-                        m_queue.Dequeue();
-
-                        item.TaskCompletionSource.TrySetResult(default);
-                    }
-                    else
-                    {
-                        return;
-                    }
-                }
-            }
-        }
-
-
-        public Task Write(byte[] buffer, int offset, int count)
-        {
-            if (count == 0)
-            {
-                return Task.CompletedTask;
-            }
-
-            lock (m_lock)
-            {
-                var item = new Item(buffer, offset, count);
-
-                m_queue.Enqueue(item);
-
-                var task = item.Task;
-
-                Write();
-
-                return task;
+                return true;
             }
         }
     }
 
-    sealed class BufferLoop : BufferAbstract
+    static class ExceptionSource
     {
-
-        readonly struct Item
+        public static SocketException Create(SocketError socketError)
         {
-            public Item(byte[] buffer, int offset, int count)
-            {
-                TaskCompletionSource = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+            return new SocketException((int)socketError);
+        }
+    }
 
-                Buffer = buffer;
+    sealed class ReadBuffer
+    {
+        sealed class ReadItem
+        {
+            public ReadItem(byte[] array, int offset, int count)
+            {
+                Buffer = array ?? throw new ArgumentNullException(nameof(array));
                 Offset = offset;
                 Count = count;
             }
 
-            public TaskCompletionSource<int> TaskCompletionSource { get; }
-
-
-            public Task<int> Task => TaskCompletionSource.Task;
 
             public byte[] Buffer { get; }
 
@@ -431,45 +466,72 @@ namespace LeiKaiFeng.TCPIP
 
             public int Count { get; }
 
+            TaskCompletionSource<int> _TaskCompletionSource;
 
-        }
+
+            Task<int> _Task;
 
 
-        private readonly object m_lock = new object();
-
-        readonly Queue<Item> m_queue = new Queue<Item>();
-
-        public int Write(byte[] buffer, int offset, int count)
-        {
-            lock (m_lock)
+            public Task<int> GetTask()
             {
-                int n = Write(WriteAdd, buffer, offset, count);
-
-                if (n != count)
+                if (_Task is null)
                 {
-                    Read();
+                    _TaskCompletionSource = new TaskCompletionSource<int>(
+                        TaskCreationOptions.RunContinuationsAsynchronously);
 
-                    n += Write(WriteAdd, buffer, offset + n, count - n);
+                    _Task = _TaskCompletionSource.Task;
+                }
 
-                    Read();
+                return _Task;
+            }
+
+
+            public void Set(Exception exception)
+            {
+                _TaskCompletionSource.TrySetException(exception);
+            }
+
+            public void Set(int n)
+            {
+                if (_TaskCompletionSource is null)
+                {
+                    _Task = Task.FromResult(n);
                 }
                 else
                 {
-                    Read();
+                    _TaskCompletionSource.TrySetResult(n);
                 }
-
-                return n;
             }
         }
+
+        readonly Queue<ReadItem> _readWaitQueue = new Queue<ReadItem>();
+
+        readonly object _lock = new object();
+
+        BufferLoop _buffer;
+
+        uint _seq;
+
+        bool _isClose;
+
+        public ReadBuffer(uint seq)
+        {
+            _seq = seq;
+
+            _buffer = new BufferLoop(default);
+
+            _isClose = false;
+        }
+
+
+
 
 
         void Read()
         {
-            while (m_queue.Count != 0)
+            while (_readWaitQueue.TryPeek(out var item))
             {
-                var item = m_queue.Peek();
-
-                int n = Read(ReadAdd, item.Buffer, item.Offset, item.Count);
+                int n = _buffer.Read(item.Buffer, item.Offset, item.Count);
 
                 if (n == 0)
                 {
@@ -477,188 +539,111 @@ namespace LeiKaiFeng.TCPIP
                 }
                 else
                 {
-                    m_queue.Dequeue();
+                    _readWaitQueue.Dequeue();
 
-                    item.TaskCompletionSource.TrySetResult(n);
+                    item.Set(n);
                 }
             }
         }
 
 
-        public Task<int> Read(byte[] buffer, int offset, int count)
+        public void Close()
         {
-            lock (m_lock)
+            lock (_lock)
             {
-                var item = new Item(buffer, offset, count);
-
-                m_queue.Enqueue(item);
-
-                var task = item.Task;
-
-                Read();
-
-                return task;
-            }
-        }
-
-        void ReadAdd(int n)
-        {
-            m_readOffset += n;
-
-            m_readCount -= n;
-
-            m_writeCount += n;
-
-        }
-
-
-        void WriteAdd(int n)
-        {
-            m_writeOffset += n;
-
-            m_writeCount -= n;
-
-            m_readCount += n;
-        }
-
-
-    }
-
-
-    abstract class BufferAbstract
-    {
-        readonly byte[] m_buffer;
-
-        protected int m_readOffset;
-
-        protected int m_readCount;
-
-        protected int m_writeOffset;
-
-        protected int m_writeCount;
-
-        public int CanReadCount => m_readCount;
-
-        public int CanWriteCount => m_writeCount;
-
-        protected BufferAbstract()
-        {
-            m_buffer = new byte[ushort.MaxValue];
-
-            m_readCount = 0;
-
-            m_readOffset = 0;
-
-            m_writeCount = m_buffer.Length;
-
-            m_writeOffset = 0;
-        }
-
-        static int CopyTo(byte[] sourceBuffer, int sourceOffset, int sourceCount,
-                           byte[] desBuffer, int desOffset, int desCount)
-        {
-            var source = sourceBuffer.AsSpan(sourceOffset, sourceCount);
-
-            var des = desBuffer.AsSpan(desOffset, desCount);
-
-
-            if (source.Length > des.Length)
-            {
-                source.Slice(0, des.Length).CopyTo(des);
-
-                return des.Length;
-            }
-            else
-            {
-                source.CopyTo(des);
-
-                return source.Length;
-            }
-        }
-
-        
-
-        protected int Write(Action<int> add, byte[] buffer, int offset, int count)
-        {
-            return Copy(m_buffer, ref m_writeOffset, ref m_writeCount,
-                buffer, offset, count,
-                add,
-                (source, sourceOffset, sourceCount,
-                desbuffer, desoffset, descount) =>
-                CopyTo(desbuffer, desoffset, descount,
-                    source, sourceOffset, sourceCount));
-        }
-
-        protected int Read(Action<int> add, byte[] buffer, int offset, int count)
-        {
-            return Copy(m_buffer, ref m_readOffset, ref m_readCount,
-                buffer, offset, count,
-                add,
-                (source, sourceOffset, sourceCount,
-                desbuffer, desoffset, descount) =>
-                CopyTo(source, sourceOffset, sourceCount,
-                desbuffer, desoffset, descount));
-        }
-
-        static int Copy(
-            byte[] source, ref int sourceOffset, ref int sourceCount,
-            byte[] buffer, int offset, int count,
-            Action<int> add,
-            Func<byte[], int, int, byte[], int, int, int> copy)
-        {
-
-            int allCount = sourceOffset + sourceCount;
-
-            
-            if (allCount > source.Length)
-            {
-
-                int n = copy(source, sourceOffset, source.Length - sourceOffset,
-                               buffer, offset, count);
-
-
-                add(n);
-
-                if (sourceOffset >= source.Length)
+                if (_isClose == false)
                 {
-                    sourceOffset -= source.Length;
+                    _isClose = true;
 
-                    offset += n;
 
-                    count -= n;
+                    while (_readWaitQueue.TryDequeue(out var item))
+                    {
+                        item.Set(ExceptionSource.Create(SocketError.Shutdown));
+                    }
 
-                    return n + Copy(source, ref sourceOffset, ref sourceCount,
-                                 buffer, offset, count,
-                                 add,
-                                 copy);
+                }
+            }
+        }
+
+        //乱序到达返回false
+        public bool Write(ref uint seqRef, out ushort windowSizeRef, byte[] buffer, int offset, int count)
+        {
+            new ArraySegment<byte>(buffer, offset, count);
+
+            uint seq = seqRef;
+
+            ushort windowSize;
+
+            bool ret;
+
+            lock (_lock)
+            {
+                if (seq == _seq)
+                {
+
+                    var n = (uint)_buffer.Write(buffer, offset, count);
+
+                    _seq += n;
+
+
+                    seq = _seq;
+
+                    windowSize = (ushort)_buffer.CanWriteCount;
+
+                    ret = true;
                 }
                 else
                 {
-                    return n;
+
+                    seq = _seq;
+
+
+                    windowSize = (ushort)_buffer.CanWriteCount;
+
+                    ret = false;
+
                 }
             }
-            else
+
+
+            seqRef = seq;
+
+
+            windowSizeRef = windowSize;
+
+            return ret;
+        }
+
+        public Task<int> Read(byte[] buffer, int offset, int count)
+        {
+            new ArraySegment<byte>(buffer, offset, count);
+
+            if (count == 0)
             {
-                //偏移是0，计数最大
-                //偏移最大，计数是0，
-                //偏移和计数的和小于总长度
-                //因为if的条件所以当前writeOffset不会越界，也无需调整
-                int n = copy(source, sourceOffset, sourceCount,
-                               buffer, offset, count);
-
-
-                add(n);
-
-                return n;
+                return Task.FromResult(0);
             }
 
 
+            lock (_lock)
+            {
+                if (_isClose)
+                {
+                    throw ExceptionSource.Create(SocketError.Shutdown);
+                }
+
+                var item = new ReadItem(buffer, offset, count);
+
+                _readWaitQueue.Enqueue(item);
+
+                Read();
+
+                return item.GetTask();
+            }
         }
     }
 
-   
 
-    
+
 
     sealed class HandshakePhase
     {
@@ -676,8 +661,10 @@ namespace LeiKaiFeng.TCPIP
 
         public Quaternion Quaternion { get; }
 
-        public void DownPacket(DownPacket downPacket)
+        public DownPacket DownPacket()
         {
+            DownPacket downPacket = new DownPacket(1024);
+
             downPacket.WriteTCP(
                     Quaternion,
                     TCPFlag.ACK | TCPFlag.SYN,
@@ -685,6 +672,9 @@ namespace LeiKaiFeng.TCPIP
                     SequenceNumber,
                     AcknowledgmentNumber,
                     default);
+
+
+            return downPacket;
 
         }
     }
@@ -701,25 +691,37 @@ namespace LeiKaiFeng.TCPIP
 
         
 
-        public TCPLayerInfo(Action<TCPStream> intoConnect)
+        public TCPLayerInfo(Func<byte[], int, int, int> read, Action<byte[], int, int> write, Action<TCPStream> intoConnect)
         {
-            
+            int mtuSize = 65535;
+
+            if (mtuSize < 576 || mtuSize > ushort.MaxValue)
+            {
+                throw new ArgumentOutOfRangeException(nameof(mtuSize), "mtu太小或太大了，偏移会出错");
+            }
+
+
+            Read = read ?? throw new ArgumentNullException(nameof(read));
+            Write = write ?? throw new ArgumentNullException(nameof(write));
+
             IntoConnect = intoConnect ?? throw new ArgumentNullException(nameof(intoConnect));
 
             Dic = new Dictionary<Quaternion, TCPStream>();
 
             HPDic = new Dictionary<Quaternion, HandshakePhase>();
-
-            DownPacketColl = new BlockingCollection<Action<DownPacket>>();
         }
+
+
+        internal Func<byte[], int, int, int> Read { get; }
+
+        internal Action<byte[], int, int> Write { get; }
+
 
         internal Dictionary<Quaternion, TCPStream> Dic { get; }
 
         internal Dictionary<Quaternion, HandshakePhase> HPDic { get; }
 
         internal Action<TCPStream> IntoConnect { get; }
-
-        internal BlockingCollection<Action<DownPacket>> DownPacketColl { get; }
     }
 
 
@@ -733,17 +735,56 @@ namespace LeiKaiFeng.TCPIP
         }
 
 
-        public static TCPLayer Init(TCPLayerInfo info)
+        public static TCPLayer Init(TCPLayerInfo info, Action<Exception> logAction)
         {
             TCPLayer layer = new TCPLayer(info);
+
+            Meth.CreateThreadAndRun(layer.Read, logAction);
 
             return layer;
         }
 
+
+
+        internal void Write(DownPacket downPacket)
+        {
+            downPacket.WriteIPPacket(m_info.Write);
+        }
+
+
+        void Read()
+        {
+            UPPacket upPacket = new UPPacket(ushort.MaxValue);
+            while (true)
+            {
+
+                if (upPacket.ReadIPPackeet(m_info.Read))
+                {
+                    UPPacket(upPacket);
+                }
+                else
+                {
+
+                    Console.WriteLine("已丢弃ip包");
+                }
+            }
+        }
+
+
         void InitHandshake(UPPacket upPacket)
         {
+            if (m_info.HPDic.Count > 6)
+            {
+                m_info.HPDic.Clear();
+
+                Console.WriteLine("等待握手太多了");
+            }
+
+
             if (m_info.HPDic.ContainsKey(upPacket.Quaternion))
             {
+                m_info.HPDic.Remove(upPacket.Quaternion);
+
                 Console.WriteLine("已经存在了一个进行中的握手");
             }
             else
@@ -759,10 +800,13 @@ namespace LeiKaiFeng.TCPIP
 
                 m_info.HPDic.Add(upPacket.Quaternion, handshakePhase);
 
-                AddDownPacket(handshakePhase.DownPacket);
+                Write(handshakePhase.DownPacket());
 
                 Console.WriteLine("一个握手开始");
             }
+
+
+            
         }
 
         void OKHandshanke(UPPacket packet, HandshakePhase handshake)
@@ -822,19 +866,7 @@ namespace LeiKaiFeng.TCPIP
         }
 
 
-        internal void AddDownPacket(Action<DownPacket> action)
-        {
-            m_info.DownPacketColl.Add(action);
-        }
-
-        public void DownPacket(DownPacket downPacket)
-        {
-            var action = m_info.DownPacketColl.Take();
-
-            action(downPacket);
-        }
-
-        public void UPPacket(UPPacket packet)
+        void UPPacket(UPPacket packet)
         {
 
             
@@ -1143,101 +1175,5 @@ namespace LeiKaiFeng.TCPIP
             Count = 0;
         }
 
-    }
-
-
-
-
-
-
-    public sealed class IPLayerInfo
-    {
-        public IPLayerInfo(Func<byte[], int, int, int> read, Action<byte[], int, int> write, Action<UPPacket> upPacket, Action<DownPacket> downPacket)
-        {
-            int mtuSize = 65535;
-
-            if (mtuSize < 576 || mtuSize > ushort.MaxValue)
-            {
-                throw new ArgumentOutOfRangeException(nameof(mtuSize), "mtu太小或太大了，偏移会出错");
-            }
-
-
-
-            Read = read ?? throw new ArgumentNullException(nameof(read));
-            Write = write ?? throw new ArgumentNullException(nameof(write));
-            UPPacket = upPacket ?? throw new ArgumentNullException(nameof(upPacket));
-            DownPacket = downPacket ?? throw new ArgumentNullException(nameof(downPacket));
-        }
-
-        internal Func<byte[], int, int, int> Read { get; }
-
-        internal Action<byte[], int, int> Write { get; }
-
-        internal Action<UPPacket> UPPacket { get; }
-
-        internal Action<DownPacket> DownPacket { get; }
-    }
-
-    public sealed class IPLayer
-    {
-        readonly IPLayerInfo m_info;
-
-        private IPLayer(IPLayerInfo info)
-        {
-            m_info = info ?? throw new ArgumentNullException(nameof(info));
-        }
-
-
-        public static IPLayer Init(IPLayerInfo info)
-        {
-            return Init(info, (e) => { });
-        }
-
-
-        public static IPLayer Init(IPLayerInfo info, Action<Exception> logAction)
-        {
-            IPLayer ipLayer = new IPLayer(info);
-
-            Meth.CreateThreadAndRun(ipLayer.Read, logAction);
-
-            Meth.CreateThreadAndRun(ipLayer.Write, logAction);
-
-            return ipLayer;
-        }
-
-        
-
-        void Write()
-        {
-            DownPacket downPacket = new DownPacket(1024);
-            while (true)
-            {
-                Console.WriteLine("Write");
-                downPacket.InitOffsetCount();
-
-                m_info.DownPacket(downPacket);
-
-                downPacket.WriteIPPacket(m_info.Write);
-            }
-        }
-
-
-        void Read()
-        {
-            UPPacket upPacket = new UPPacket(ushort.MaxValue);
-            while (true)
-            {
-                
-                if (upPacket.ReadIPPackeet(m_info.Read))
-                {
-                    m_info.UPPacket(upPacket);
-                }
-                else
-                {
-                    
-                    Console.WriteLine("已丢弃ip包");
-                }
-            }
-        }
     }
 }

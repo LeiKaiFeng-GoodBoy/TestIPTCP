@@ -82,25 +82,7 @@ namespace LeiKaiFeng.TCPIP
         }
 
 
-        public static ushort Set(ref UDPHeader header, UDPWriteData writeData, Span<byte> buffer)
-        {
-            header = new UDPHeader();
-
-            ushort alllength = GetAllLength(writeData.Length);
-
-            header._SourcePort = Meth.AsBigEndian(writeData.SourcePort);
-
-            header._DesPort = Meth.AsBigEndian(writeData.DesPort);
-
-            header._Length = Meth.AsBigEndian(alllength);
-
-            header._Sum = Meth.AsBigEndian(Meth.CalculationHeaderChecksum(
-                new PseudoHeader(writeData.Source, writeData.Des, ref header),
-                buffer.Slice(0, alllength)));
-
-
-            return alllength;
-        }
+       
 
         public static ushort GetAllLength(ushort length)
         {
@@ -364,34 +346,7 @@ namespace LeiKaiFeng.TCPIP
             header.CalculationHeaderChecksum();
         }
 
-        public static ushort Set(ref IPHeader header, IPWriteData writeData)
-        {
-            header = new IPHeader();
-
-            ushort allLength = GetAllLength(writeData.Length);
-
-            header._IPHeader0_32._Version_HeaderLength = 0b0100_0101;
-
-
-            header._IPHeader0_32._AllLegnth = Meth.AsBigEndian(allLength);
-
-            header._IPHeader64_96._Protocol = (byte)writeData.Pro;
-
-            header._IPHeader64_96._TTL = 128;
-
-            header._SourceAddress = writeData.Source;
-
-            header._DesAddress = writeData.Des;
-
-            header._IPHeader32_64._16Flag = Meth.GetCount();
-
-            header._IPHeader32_64._Frag = 0x40;
-
-
-            header.CalculationHeaderChecksum();
-
-            return allLength;
-        }
+        
 
         public void CalculationHeaderChecksum()
         {

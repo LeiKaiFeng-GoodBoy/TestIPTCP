@@ -120,32 +120,32 @@ namespace TestIPTCP
             //\\.\pipe\MMYY
             var wir = WiresharkSender.Create("MMYY");
 
-            TCPLayerInfo layerInfo = new TCPLayerInfo((tcp) =>
+            TCPLayerInfo layerInfo = new TCPLayerInfo(
+                ReadUDPAndWir(socket, wir),
+                WriteUDPAndWir(socket, wir),
+            (tcp) =>
             {
-                Socket connect = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-
-                connect.Connect(new IPEndPoint(IPAddress.Loopback, 80));
-
-                NetworkStream networkStream = new NetworkStream(connect);
+                byte[] buffer = new byte[ushort.MaxValue];
 
 
-                networkStream.CopyToAsync(tcp);
+                while (true)
+                {
 
-                tcp.CopyToAsync(networkStream);
+                    tcp.Read(buffer);
+
+                }
+
+
+
+
 
 
             });
 
-            var tcp = TCPLayer.Init(layerInfo);
+            var tcp = TCPLayer.Init(layerInfo, (e) => Console.WriteLine(e));
 
 
-            var la = IPLayer.Init(new IPLayerInfo(
-                ReadUDPAndWir(socket, wir),
-                WriteUDPAndWir(socket, wir),
-                tcp.UPPacket,
-                tcp.DownPacket), (e) => Console.WriteLine(e));
-
-
+            
 
             Console.Read();
         }
