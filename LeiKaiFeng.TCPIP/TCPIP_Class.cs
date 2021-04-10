@@ -402,8 +402,6 @@ namespace LeiKaiFeng.TCPIP
 
 
 
-
-
     static class QueueExtensions
     {
         public static bool TryPeek<T>(this Queue<T> queue, out T item)
@@ -1176,4 +1174,199 @@ namespace LeiKaiFeng.TCPIP
         }
 
     }
+
+
+
+
+    [StructLayout(LayoutKind.Auto)]
+    public sealed class WriteUDPPacket
+    {
+
+        byte[] Array { get; }
+
+        int Offset { get; set; }
+
+
+        //Count代表的是是写入的有效字节的长度
+        //而不是缓冲区可以使用的长度
+        int Count { get; set; }
+
+        public void Write(Action<byte[], int, int> action)
+        {
+            action(Array, Offset, Count);
+        }
+
+        int Copy(Span<byte> buffer)
+        {
+            Span<byte> arrayBuffer = Array.AsSpan(Offset);
+
+            int n;
+            if (buffer.Length > arrayBuffer.Length)
+            {
+                buffer.Slice(0, arrayBuffer.Length).CopyTo(arrayBuffer);
+
+                n = arrayBuffer.Length;
+            }
+            else
+            {
+                buffer.CopyTo(arrayBuffer);
+
+                n = buffer.Length;
+
+            }
+
+            Count += n;
+
+            return n;
+        }
+
+        public int WriteUDP(
+            Quaternion quaternion,
+            Span<byte> buffer)
+        {
+            
+            int count = Copy(buffer);
+
+            Offset -= UDPHeader.HEADER_SIZE;
+
+            Count += UDPHeader.HEADER_SIZE;
+
+            ref var header = ref Meth.AsStruct<UDPHeader>(Array.AsSpan(Offset));
+
+            UDPHeader.Set(
+                ref header,
+                quaternion.Source.Address,
+                quaternion.Source.Port,
+                quaternion.Des.Address,
+                quaternion.Des.Port,
+                Array.AsSpan(Offset, Count));
+
+            WriteIPHeader(new IPData(quaternion.Source.Address, quaternion.Des.Address, Protocol.UDP));
+
+            return count;
+        }
+
+        void WriteIPHeader(IPData data)
+        {
+            int count = Count;
+
+            Offset -= IPHeader.HEADER_SIZE;
+
+            Count += IPHeader.HEADER_SIZE;
+
+            ref IPHeader header = ref Meth.AsStruct<IPHeader>(Array.AsSpan(Offset));
+
+            
+            IPHeader.Set(ref header, data, (ushort)count);
+        }
+
+        public WriteUDPPacket(int size)
+        {
+
+            Array = new byte[size];
+
+            InitOffsetCount();
+        }
+
+
+        public void InitOffsetCount()
+        {
+            //给标头预留空间免得复制缓冲区
+            Offset = IPHeader.HEADER_SIZE + UDPHeader.HEADER_SIZE;
+
+            Count = 0;
+        }
+
+    }
+
+
+
+
+
+
+
+
+    [StructLayout(LayoutKind.Auto)]
+    public sealed class ReadUDPPacket
+    {
+
+        public byte[] Array { get; }
+
+        public int Offset { get; private set; }
+
+        public int Count { get; private set; }
+
+        public Quaternion Quaternion { get; private set; }
+       
+        public bool Read(Func<byte[], int, int, int> func)
+        {
+            int count = func(Array, 0, Array.Length);
+
+            Offset = 0;
+
+            Count = count;
+
+            return ReadIPHeader();
+        }
+
+        bool ReadIPHeader()
+        {
+            ref IPHeader header = ref Meth.AsStruct<IPHeader>(Array.AsSpan(Offset));
+
+            if (header.HeadLength != 5)
+            {
+                return false;    
+            }
+            else
+            {
+                
+                Offset += IPHeader.HEADER_SIZE;
+
+                Count -= IPHeader.HEADER_SIZE;
+
+                if (header.Protocol == Protocol.UDP)
+                {
+                    return ReadUDPHeader(header.SourceAddress, header.DesAddress);
+
+                }
+                else
+                {
+                    return false;
+                }
+
+            }
+        }
+
+
+        bool ReadUDPHeader(IPv4Address source, IPv4Address des)
+        {
+            ref var header = ref Meth.AsStruct<UDPHeader>(Array.AsSpan(Offset));
+
+            int headerSize = UDPHeader.HEADER_SIZE;
+
+            Offset += headerSize;
+
+            Count -= headerSize;
+
+            Quaternion = new Quaternion(
+                new IPv4EndPoint(source, header.SourcePort),
+                new IPv4EndPoint(des, header.DesPort));
+
+            return true;
+        }
+
+
+        public ReadUDPPacket(int size)
+        {
+
+            Array = new byte[size];
+
+            Offset = 0;
+
+            Count = 0;
+        }
+    }
+
+
+
 }

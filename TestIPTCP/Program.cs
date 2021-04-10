@@ -120,34 +120,52 @@ namespace TestIPTCP
             //\\.\pipe\MMYY
             var wir = WiresharkSender.Create("MMYY");
 
-            TCPLayerInfo layerInfo = new TCPLayerInfo(
-                ReadUDPAndWir(socket, wir),
-                WriteUDPAndWir(socket, wir),
-            (tcp) =>
+            var read = ReadUDPAndWir(socket, wir);
+
+            var write = WriteUDPAndWir(socket, wir);
+
+
+            var packet = new ReadUDPPacket(2048);
+
+            while (true)
             {
-                byte[] buffer = new byte[ushort.MaxValue];
 
-
-                while (true)
+                if (packet.Read(read))
                 {
 
-                    tcp.Read(buffer);
+                    Console.WriteLine(packet.Quaternion);
+                    Console.WriteLine(packet.Count);
+                    Console.WriteLine(packet.Offset);
 
                 }
+                else
+                {
+                    Console.WriteLine("error");
+                }
+            }
 
 
 
 
+            //var packet = new WriteUDPPacket(1024);
 
 
-            });
+            //foreach (var item in Enumerable.Range(0,6))
+            //{
+            //    packet.InitOffsetCount();
 
-            var tcp = TCPLayer.Init(layerInfo, (e) => Console.WriteLine(e));
+            //    packet.WriteUDP(new Quaternion(
+            //        new IPv4EndPoint(new IPv4Address(192, 168, 1, 106), 53),
+            //        new IPv4EndPoint(new IPv4Address(192, 168, 1, 104), 3345)),
+            //        default);
 
 
-            
+            //    packet.Write(write);
+            //}
 
-            Console.Read();
+
+
+            Console.ReadLine();
         }
 
         static void Main()

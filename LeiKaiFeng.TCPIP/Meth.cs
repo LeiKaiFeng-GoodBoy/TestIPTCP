@@ -32,6 +32,7 @@ namespace LeiKaiFeng.TCPIP
         }
 
 
+        
         public static void GetOffsetCount(byte[] buffer, Span<byte> span, out int offset)
         {
 

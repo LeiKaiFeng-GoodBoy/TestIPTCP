@@ -31,20 +31,12 @@ namespace LeiKaiFeng.TCPIP
             _Pro = (byte)protocol;
             _Length = Meth.AsBigEndian(length);
         }
-
-        public PseudoHeader(IPv4Address sourceAddress, IPv4Address desAddress, ref UDPHeader header)
-        {
-            _SourceAddress = sourceAddress;
-            _DesAddress = desAddress;
-            _Pro = 17;
-            _Length = header.SourceLength;
-        }
     }
 
     [StructLayout(LayoutKind.Explicit, Size = 8)]
     public struct UDPHeader
     {
-        const int HEADER_SIZE = 8;
+        public const int HEADER_SIZE = 8;
 
 
         [FieldOffset(0)]
@@ -58,9 +50,6 @@ namespace LeiKaiFeng.TCPIP
 
         [FieldOffset(6)]
         ushort _Sum;
-
-
-        internal ushort SourceLength => _Length;
 
         public ushort SourcePort => Meth.AsBigEndian(_SourcePort);
 
@@ -93,6 +82,35 @@ namespace LeiKaiFeng.TCPIP
         {
             return buffer.Slice(HEADER_SIZE);
         }   
+
+
+
+        public static void Set(
+            ref UDPHeader header,
+            IPv4Address sourceAddress,
+            ushort sourcePort,
+            IPv4Address desAddress,
+            ushort desPort,
+            Span<byte> headerAndData)
+        {
+            header = new UDPHeader();
+
+            header._SourcePort = Meth.AsBigEndian(sourcePort);
+
+            header._DesPort = Meth.AsBigEndian(desPort);
+
+            header._Length = Meth.AsBigEndian((ushort)headerAndData.Length);
+
+            var per = new PseudoHeader(
+                sourceAddress,
+                desAddress,
+                Protocol.UDP,
+                (ushort)headerAndData.Length);
+
+
+            header._Sum = Meth.AsBigEndian(Meth.CalculationHeaderChecksum(per, headerAndData));
+
+        }
     }
 
     [StructLayout(LayoutKind.Auto)]
