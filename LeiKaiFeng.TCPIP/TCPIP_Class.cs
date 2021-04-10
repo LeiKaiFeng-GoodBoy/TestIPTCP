@@ -1220,13 +1220,16 @@ namespace LeiKaiFeng.TCPIP
             return n;
         }
 
-        public int WriteUDP(
-            Quaternion quaternion,
-            Span<byte> buffer)
+        public void WriteUDP(Func<byte[], int, int, int> read)
+        {
+            int n = read(Array, Offset, Array.Length - Offset);
+
+            Count += n;
+        }
+
+        public void WriteUDP(Quaternion quaternion)
         {
             
-            int count = Copy(buffer);
-
             Offset -= UDPHeader.HEADER_SIZE;
 
             Count += UDPHeader.HEADER_SIZE;
@@ -1243,7 +1246,6 @@ namespace LeiKaiFeng.TCPIP
 
             WriteIPHeader(new IPData(quaternion.Source.Address, quaternion.Des.Address, Protocol.UDP));
 
-            return count;
         }
 
         void WriteIPHeader(IPData data)
@@ -1295,6 +1297,8 @@ namespace LeiKaiFeng.TCPIP
         public int Offset { get; private set; }
 
         public int Count { get; private set; }
+
+       
 
         public Quaternion Quaternion { get; private set; }
        
