@@ -93,6 +93,41 @@ namespace TestIPTCP
             return socket;
         }
 
+
+        public static void Start(Func<byte[], int, int, int> read, Action<byte[], int, int> write, Socket socket)
+        {
+            var readPacket = new ReadUDPPacket(ushort.MaxValue);
+
+            var writePacket = new WriteUDPPacket(ushort.MaxValue);
+
+            //这个地方主要是为了简单，否则要保存链接之间的映射关系，还要必要使拆除
+            //这样读一个请求，返回一个应答，不需要保存映射关系
+
+            while (true)
+            {
+                writePacket.InitOffsetCount();
+
+                if (readPacket.Read(read))
+                {
+
+                    socket.Send(readPacket.Array, readPacket.Offset, readPacket.Count, SocketFlags.None);
+
+
+                    writePacket.WriteUDP((buffer, offset, count) => socket.Receive(buffer, offset, count, SocketFlags.None));
+
+                    writePacket.WriteUDP(readPacket.Quaternion.Reverse());
+
+
+                    writePacket.Write(write);
+                }
+                else
+                {
+                    Console.WriteLine("error");
+                }
+            }
+        }
+
+
     }
 
 
@@ -216,39 +251,7 @@ namespace TestIPTCP
         }
 
 
-        static void Start(Func<byte[], int, int, int> read, Action<byte[], int, int> write, Socket socket)
-        {
-            var readPacket = new ReadUDPPacket(ushort.MaxValue);
-
-            var writePacket = new WriteUDPPacket(ushort.MaxValue);
-
-            //这个地方主要是为了简单，否则要保存链接之间的映射关系，还要必要使拆除
-            //这样读一个请求，返回一个应答，不需要保存映射关系
-
-            while (true)
-            {
-                writePacket.InitOffsetCount();
-
-                if (readPacket.Read(read))
-                {
-
-                    socket.Send(readPacket.Array, readPacket.Offset, readPacket.Count, SocketFlags.None);
-
-
-                    writePacket.WriteUDP((buffer, offset, count) => socket.Receive(buffer, offset, count, SocketFlags.None));
-
-                    writePacket.WriteUDP(readPacket.Quaternion.Reverse());
-
-
-                    writePacket.Write(write);
-                }
-                else
-                {
-                    Console.WriteLine("error");
-                }
-            }
-        }
-
+        
         static void Udp()
         {
             Socket socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
@@ -272,7 +275,7 @@ namespace TestIPTCP
             var con = DNS();
 
 
-            Start(read, write, con);
+           LocalRequestResolver.Start(read, write, con);
 
 
             Console.ReadLine();
