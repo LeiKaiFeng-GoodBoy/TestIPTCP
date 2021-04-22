@@ -1042,7 +1042,7 @@ namespace LeiKaiFeng.TCPIP
         }
 
        
-        internal UPPacket(int size)
+        public UPPacket(int size)
         {
            
             Array = new byte[size];
@@ -1156,7 +1156,7 @@ namespace LeiKaiFeng.TCPIP
             IPHeader.Set(ref header, data, (ushort)count);
         }
 
-        internal DownPacket(int size)
+        public DownPacket(int size)
         {
            
             Array = new byte[size];
@@ -1372,5 +1372,52 @@ namespace LeiKaiFeng.TCPIP
     }
 
 
+
+
+    public static class AsTo
+    {
+        
+        public static void As(Span<byte> buffer, Func<Quaternion, Quaternion> func)
+        {
+            ref var ip = ref Meth.AsStruct<IPHeader>(buffer);
+
+            if (ip.Protocol == Protocol.UDP)
+            {
+                Console.WriteLine("UDP");
+
+                return;
+            }
+
+            var tcpStart = buffer.Slice(IPHeader.HEADER_SIZE);
+
+            ref var tcp = ref Meth.AsStruct<TCPHeader>(tcpStart);
+
+
+            var que = func(new Quaternion(
+                new IPv4EndPoint(ip.SourceAddress, tcp.SourcePort),
+                new IPv4EndPoint(ip.DesAddress, tcp.DesPort)));
+
+
+            TCPHeader.Set(
+                ref tcp,
+                que.Source.Address,
+                que.Source.Port,
+                que.Des.Address,
+                que.Des.Port,
+                tcpStart);
+
+
+            IPHeader.Set(
+                ref ip,
+                que.Source.Address,
+                que.Des.Address,
+                Protocol.TCP);
+
+
+
+
+
+        }
+    }
 
 }

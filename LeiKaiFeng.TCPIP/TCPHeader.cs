@@ -84,6 +84,30 @@ namespace LeiKaiFeng.TCPIP
 
         public static void Set(
             ref TCPHeader header,
+            IPv4Address sourceAddress,
+            ushort sourcePort,
+            IPv4Address desAddress,
+            ushort desPort,
+            Span<byte> headerAndData)
+        {
+            header._SourcePort = Meth.AsBigEndian(sourcePort);
+
+            header._DesPort = Meth.AsBigEndian(desPort);
+
+            var ph = new PseudoHeader(
+               sourceAddress,
+               desAddress,
+               Protocol.TCP,
+               (ushort)headerAndData.Length);
+
+            header._Checksum = 0;
+
+            header._Checksum = Meth.AsBigEndian(Meth.CalculationHeaderChecksum(ph, headerAndData));
+        }
+
+
+        public static void Set(
+            ref TCPHeader header,
             IPv4Address sourceAddress,      
             ushort sourcePort,
             IPv4Address desAddress,

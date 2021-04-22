@@ -210,7 +210,7 @@ namespace TestIPTCP
 
         static Action<byte[], int,int> WriteUDPAndWir(Socket socket, WiresharkSender sender)
         {
-            byte[] readArray = new byte[75536];
+            byte[] readArray = new byte[ushort.MaxValue];
 
             int index = WriteDes(readArray);
 
@@ -223,7 +223,6 @@ namespace TestIPTCP
 
                 sender.SendToWireshark(readArray, 0, index + count);
 
-
                 socket.Send(readArray, index, count, SocketFlags.None);
 
             };
@@ -232,7 +231,7 @@ namespace TestIPTCP
         static Func<byte[], int, int, int> ReadUDPAndWir(Socket socket, WiresharkSender sender)
         {
             
-            byte[] readArray = new byte[75536];
+            byte[] readArray = new byte[ushort.MaxValue];
 
             int index = WriteSource(readArray);
 
@@ -250,7 +249,54 @@ namespace TestIPTCP
             };
         }
 
+        static Func<Quaternion, Quaternion> CreateAs(ushort sourcePort, ushort desPort)
+        {
+            //一言蔽之，就是，
+            //因为TUN读取出来的是IP数据包，而我又写不出TCP协议，索性利用系统的TCP实现
+            //利用办法就是，把读取出的IP数据包和TCP数据包的包头的IP和端口修改，再重新写回TUN
 
+
+            //原始地址是确定的，都是设置的TUN的地址
+            //目标端口只支持443或者只支持80，那么目标端口也是确定的
+            //目的地址不确定
+            //原始端口不确定
+            //也就是说我们只需要记录目的地址与原始端口
+            //又因为IP数据包的去和回本身也会携带信息，目的端点会变成原始端点返回
+            //则将目的地址转换为原始地址
+            //将原始端口转换为目的端口
+            //这样就能保存目的地址与原始端口
+            //我们本身不需要保存任何状态
+            //也不需要实现TCP协议
+            //就能实现一个虽然不通用，却特定的应用
+            //缺点是占用一个TCP端口，并且外界无法主动与内部通信，等等
+            //类似于把其他网站全部汇集到一个IP:PORT上，通过HTTPS的SNI或者HTTP Host来判断请求的主机
+
+            return (que) =>
+            {
+
+                if (que.Source.Port == desPort)
+                {
+                    return new Quaternion(
+                        source: new IPv4EndPoint(que.Des.Address, sourcePort),
+                        des: new IPv4EndPoint(que.Source.Address, que.Des.Port));
+                }
+                else
+                if (que.Des.Port == sourcePort)
+                {
+                    return new Quaternion(
+                       source: new IPv4EndPoint(que.Des.Address, que.Source.Port),
+                       des: new IPv4EndPoint(que.Source.Address, desPort));
+
+
+                }
+                else
+                {
+                    Console.WriteLine("port 错误");
+
+                    return que;
+                }
+            };
+        }
         
         static void Udp()
         {
@@ -272,11 +318,19 @@ namespace TestIPTCP
 
             //Action<byte[], int, int> write = (buffer, offset, count) => socket.Send(buffer, offset, count, SocketFlags.None);
 
-            var con = DNS();
+            byte[] buffer = new byte[ushort.MaxValue];
+
+            while (true)
+            {
+
+                int n = read(buffer, 0, buffer.Length);
+
+                AsTo.As(buffer.AsSpan(0, n), CreateAs(80, 8888));
 
 
-           LocalRequestResolver.Start(read, write, con);
 
+                write(buffer, 0, n);
+            }
 
             Console.ReadLine();
         }

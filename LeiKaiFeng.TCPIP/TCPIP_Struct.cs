@@ -337,6 +337,23 @@ namespace LeiKaiFeng.TCPIP
         [FieldOffset(16)]
         IPv4Address _DesAddress;
 
+        public static void Set(
+            ref IPHeader header,
+            IPv4Address sourceAddress,
+            IPv4Address desAddress,
+            Protocol protocol)
+        {
+
+            header._SourceAddress = sourceAddress;
+
+            header._DesAddress = desAddress;
+
+
+            header._IPHeader64_96._Protocol = (byte)protocol;
+
+            header.CalculationHeaderChecksum();
+        }
+
         public static void Set(ref IPHeader header, IPData ipData, ushort count)
         {
             header = new IPHeader();
@@ -368,6 +385,8 @@ namespace LeiKaiFeng.TCPIP
 
         public void CalculationHeaderChecksum()
         {
+            _IPHeader64_96._HeaderChecksum = 0;
+
             _IPHeader64_96._HeaderChecksum = Meth.AsBigEndian(Meth.CalculationHeaderChecksum(ref this));
         }
 
